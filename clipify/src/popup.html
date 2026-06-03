@@ -37,6 +37,7 @@
       .row { display: flex; align-items: center; gap: 12px; }
       .row > label { width: 52px; flex: none; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
       .row > .seg, .row > input { flex: 1; }
+      .row > .val { width: 38px; flex: none; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
       .seg { display: flex; background: #303030; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
       .seg button {
         flex: 1; appearance: none; border: 0; background: transparent; color: var(--dim);
@@ -113,6 +114,23 @@
         <div class="row">
           <label>Amount</label>
           <input type="range" id="silence" min="0" max="1" step="0.01" />
+        </div>
+      </div>
+
+      <div class="section"><span class="toggle" id="level-toggle"></span> Level</div>
+      <div class="body" id="level-body">
+        <div class="row">
+          <label>Ceiling</label>
+          <input type="range" id="ceiling" min="-6" max="0" step="0.5" />
+          <span class="val" id="ceiling-val"></span>
+        </div>
+        <div class="row">
+          <label>Max ±</label>
+          <div class="seg" id="maxchange">
+            <button data-val="6">6 dB</button>
+            <button data-val="12">12 dB</button>
+            <button data-val="24">24 dB</button>
+          </div>
         </div>
       </div>
 

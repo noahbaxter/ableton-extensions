@@ -5,3 +5,4 @@ dist/
 *.log
 examples/
 .clipify-dev/
+.clipify-dev-temp/

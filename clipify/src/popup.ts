@@ -77,7 +77,22 @@ function draw(clips: ClipDraw[]): void {
   const waveColor = css.getPropertyValue("--wave");
   const accent = css.getPropertyValue("--accent");
 
-  for (const d of clips) {
+  const levels = state.levelOn ? levelPreview(clips.map((d) => d.clip)) : null;
+
+  // level preview: 0 dB (no-change) reference line; per-clip gain lines drawn in the loop
+  if (levels) {
+    g.strokeStyle = "rgba(255, 255, 255, 0.16)";
+    g.setLineDash([4, 4]);
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(0, H / 2);
+    g.lineTo(W, H / 2);
+    g.stroke();
+    g.setLineDash([]);
+  }
+
+  for (let i = 0; i < clips.length; i++) {
+    const d = clips[i]!;
     // inset 1px each side so adjacent clips show a thin dark seam
     const x0 = toX(d.clip.winStartBeat) + 1;
     const x1 = toX(d.clip.winEndBeat) - 1;
@@ -121,7 +136,50 @@ function draw(clips: ClipDraw[]): void {
       g.lineTo(x, H);
     }
     g.stroke();
+
+    // level preview: per-clip gain as a horizontal line — above center = boost,
+    // below = reduce. Full ±maxChange maps to ~40% of the canvas height each way.
+    const gainDb = levels?.[i];
+    if (gainDb != null) {
+      const y = H / 2 - (gainDb / state.maxChangeDb) * (H * 0.4);
+      g.beginPath();
+      g.moveTo(x0, y);
+      g.lineTo(x1, y);
+      g.lineWidth = 5; // dark halo for legibility over the waveform
+      g.strokeStyle = "rgba(0, 0, 0, 0.6)";
+      g.stroke();
+      g.lineWidth = 3;
+      g.strokeStyle = accent;
+      g.stroke();
+    }
   }
+}
+
+// Rough per-clip gain (signed dB) from the waveform envelope, mirroring level.ts: a
+// common RMS target = min(ceiling − crest) across clips, each clip moved toward it
+// (up or down) clamped by max-change. null = silent clip. Approximate — the real
+// gains are measured at apply.
+function levelPreview(views: ClipView[]): (number | null)[] {
+  const ests = views.map((v) => {
+    let sq = 0;
+    let pk = 0;
+    for (const e of v.envelope) {
+      sq += e * e;
+      if (e > pk) pk = e;
+    }
+    const rmsDb = v.envelope.length && sq > 0 ? 10 * Math.log10(sq / v.envelope.length) : -Infinity;
+    const peakDb = pk > 0 ? 20 * Math.log10(pk) : -Infinity;
+    return { rmsDb, peakDb };
+  });
+  const valid = ests.filter((e) => Number.isFinite(e.rmsDb) && Number.isFinite(e.peakDb));
+  if (!valid.length) return ests.map(() => null);
+  const target = Math.min(...valid.map((e) => state.ceilingDb - (e.peakDb - e.rmsDb)));
+
+  return ests.map((e) =>
+    Number.isFinite(e.rmsDb)
+      ? Math.max(-state.maxChangeDb, Math.min(state.maxChangeDb, target - e.rmsDb))
+      : null,
+  );
 }
 
 function bindSeg(id: string, key: keyof Settings, after?: () => void): void {
@@ -138,7 +196,7 @@ function bindSeg(id: string, key: keyof Settings, after?: () => void): void {
 }
 
 // Orange-square section enable: toggles a boolean setting and shows/hides the body.
-function bindToggle(squareId: string, key: "splitOn" | "stripOn", bodyId: string): void {
+function bindToggle(squareId: string, key: "splitOn" | "stripOn" | "levelOn", bodyId: string): void {
   const square = el(squareId);
   const sync = () => {
     square.classList.toggle("off", !state[key]);
@@ -185,6 +243,38 @@ function sendResult(payload: unknown): void {
   }
 }
 
+// Ceiling slider reads in dB (−6…0), not 0…1, so it paints its own fill + readout.
+function wireCeiling(): void {
+  const input = el("ceiling") as HTMLInputElement;
+  const min = Number(input.min);
+  const max = Number(input.max);
+  const paint = () => {
+    const v = Number(input.value);
+    input.style.setProperty("--fill", ((v - min) / (max - min)) * 100 + "%");
+    el("ceiling-val").textContent = v.toFixed(1);
+  };
+  input.value = String(state.ceilingDb);
+  paint();
+  input.addEventListener("input", () => {
+    state.ceilingDb = parseFloat(input.value);
+    paint();
+    selectCuts();
+  });
+}
+
+function wireMaxChange(): void {
+  const box = el("maxchange");
+  box.querySelectorAll("button").forEach((b) => {
+    const val = Number(b.getAttribute("data-val")) as Settings["maxChangeDb"];
+    b.classList.toggle("on", val === state.maxChangeDb);
+    b.addEventListener("click", () => {
+      state.maxChangeDb = val;
+      box.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+      selectCuts();
+    });
+  });
+}
+
 function init(): void {
   const count = DATA.clips.length;
   el("subtitle").textContent =
@@ -199,6 +289,7 @@ function init(): void {
 
   bindToggle("split-toggle", "splitOn", "split-body");
   bindToggle("strip-toggle", "stripOn", "strip-body");
+  bindToggle("level-toggle", "levelOn", "level-body");
   bindSeg("mode", "mode", () => {
     sensEl.value = String(sens());
     fill(sensEl);
@@ -206,6 +297,8 @@ function init(): void {
   bindSeg("cutat", "cutAt");
   bindSeg("action", "stripAction");
   bindSeg("thresh", "thresh");
+  wireCeiling();
+  wireMaxChange();
 
   el("cancel").addEventListener("click", () => sendResult({ action: "cancel", settings: state }));
   el("apply").addEventListener("click", () =>

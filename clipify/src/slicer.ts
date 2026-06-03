@@ -14,6 +14,7 @@ import { detectSoundSegments, smoothedRms, floorFromRms } from "./silence.js";
 import { buildCandidates, type Candidate } from "./candidates.js";
 import { buildEnvelope } from "./envelope.js";
 import { renderWindow } from "./render.js";
+import { applyLevel, type LevelRange } from "./level.js";
 import { loadSettings, saveSettings, type Settings } from "./settings.js";
 import { computeSelection, type Portions } from "./select.js";
 import { debug } from "./debug.js";
@@ -58,6 +59,7 @@ async function prepareAll(
   const beatPerSec = context.application.song.tempo / 60;
   const rendered = [];
   for (const target of targets) {
+    debug.log(`render "${target.clip.name}" [${debug.fmt(target.winStartBeat)}..${debug.fmt(target.winEndBeat)}]`);
     const { channels, sampleRate, durSec } = await renderWindow(
       context,
       target.track,
@@ -127,7 +129,7 @@ export async function runSliceStrip(context: Ctx, targets: Target[]): Promise<vo
 
   let resultStr: string;
   try {
-    resultStr = await context.ui.showModalDialog(`data:text/html,${encodeURIComponent(html)}`, 520, 450);
+    resultStr = await context.ui.showModalDialog(`data:text/html,${encodeURIComponent(html)}`, 520, 540);
   } catch {
     return; // dialog dismissed
   }
@@ -142,7 +144,7 @@ export async function runSliceStrip(context: Ctx, targets: Target[]): Promise<vo
   if (result.action !== "apply") return;
 
   const s = result.settings ?? settings;
-  await applyMany(context, preps, s, { split: s.splitOn, strip: s.stripOn });
+  await applyMany(context, preps, s, { split: s.splitOn, strip: s.stripOn }, s.levelOn);
 }
 
 // Headless command: run the chosen portions with the last-saved settings, no popup.
@@ -153,7 +155,7 @@ export async function runHeadless(
 ): Promise<void> {
   const settings = await loadSettings(context.environment.storageDirectory);
   const preps = await prepareAll(context, targets, false, settings.avgAcrossClips);
-  await applyMany(context, preps, settings, portions);
+  await applyMany(context, preps, settings, portions, false);
 }
 
 function dedupe(beats: number[]): number[] {
@@ -169,11 +171,13 @@ interface Job {
 }
 
 // Turn each prepared clip into a selection, then apply them all under one dialog.
+// Splits/strips run first; LEVEL (when on) runs last over the clips that now exist.
 async function applyMany(
   context: Ctx,
   preps: ClipPrep[],
   settings: Settings,
   portions: Portions,
+  level: boolean,
 ): Promise<void> {
   const action: "off" | "deactivate" | "delete" = portions.strip ? settings.stripAction : "off";
 
@@ -195,7 +199,7 @@ async function applyMany(
       jobs.push({ track: p.target.track, cuts: dedupe(sel.cutBeats), strips: sel.strips });
     }
   }
-  if (!jobs.length) {
+  if (!jobs.length && !level) {
     console.log("[clipify] nothing to do.");
     return;
   }
@@ -204,13 +208,23 @@ async function applyMany(
   const totalStrips = jobs.reduce((n, j) => n + j.strips.length + (j.deleteWhole ? 1 : 0), 0);
   console.log(
     `[clipify] ${jobs.length} clip(s): ${totalCuts} cuts` +
-      (action !== "off" && totalStrips ? `, ${action} ${totalStrips} region(s).` : "."),
+      (action !== "off" && totalStrips ? `, ${action} ${totalStrips} region(s)` : "") +
+      (level ? ", level" : "") + ".",
   );
 
   await context.ui.withinProgressDialog("Clipify…", {}, async (update) => {
     for (let i = 0; i < jobs.length; i++) {
-      await update(`Clip ${i + 1} of ${jobs.length}…`, Math.round((i / jobs.length) * 100));
+      const pct = level ? Math.round((i / jobs.length) * 55) : Math.round((i / jobs.length) * 100);
+      await update(`Clip ${i + 1} of ${jobs.length}…`, pct);
       await applyJob(context, jobs[i]!, action);
+    }
+    if (level) {
+      const ranges: LevelRange[] = preps.map((p) => ({
+        track: p.target.track,
+        startBeat: p.target.winStartBeat,
+        endBeat: p.target.winEndBeat,
+      }));
+      await applyLevel(context, ranges, settings, update);
     }
   });
 }

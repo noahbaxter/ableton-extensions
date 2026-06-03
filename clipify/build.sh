@@ -58,10 +58,13 @@ echo "Using node $(node -v)"
 dev_run() {
   local cli="node_modules/.bin/extensions-cli"
   local storage="$PWD/.clipify-dev" # stable storageDirectory so settings persist in dev
+  local tmp="$PWD/.clipify-dev-temp" # tempDirectory (Live provides one when installed)
   local log; log="$(mktemp)"
 
+  mkdir -p "$storage" "$tmp" # the host sets these paths but won't create them
+
   echo "Warming up Extension Host handshake…"
-  "$cli" run --storage-directory "$storage" >"$log" 2>&1 &
+  "$cli" run --storage-directory "$storage" --temp-directory "$tmp" >"$log" 2>&1 &
   local wpid=$!
   # wait (up to ~8s) for the warm-up host to come up
   local i
@@ -76,7 +79,7 @@ dev_run() {
   rm -f "$log"
 
   echo "Launching Extension Host…"
-  exec "$cli" run --storage-directory "$storage"
+  exec "$cli" run --storage-directory "$storage" --temp-directory "$tmp"
 }
 
 case "${1:-package}" in

@@ -16,6 +16,10 @@ export interface Settings {
   stripAction: "deactivate" | "delete";
   thresh: "silence" | "quiet" | "content"; // what the strip targets
   silence: number; // 0..1, strip-zone extent
+  // level
+  levelOn: boolean; // LEVEL section enabled
+  ceilingDb: number; // dBFS peak ceiling a boost may not exceed
+  maxChangeDb: 6 | 12 | 24; // hardest boost allowed on any one clip
   // advanced
   avgAcrossClips: boolean; // share one noise floor across all selected clips
 }
@@ -30,6 +34,9 @@ const DEFAULTS: Settings = {
   stripAction: "deactivate",
   thresh: "quiet",
   silence: 0.5,
+  levelOn: false,
+  ceilingDb: -1,
+  maxChangeDb: 12,
   avgAcrossClips: true,
 };
 
