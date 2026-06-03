@@ -9,8 +9,7 @@
     "package": "npm run build && extensions-cli package -o dist/clipify.ablx"
   },
   "dependencies": {
-    "@ableton-extensions/sdk": "file:/Users/noahbaxter/.claude/docs/ableton-extensions-sdk/ableton-extensions-sdk-1.0.0-beta.0.tgz",
-    "audio-decode": "^2.2.3"
+    "@ableton-extensions/sdk": "file:/Users/noahbaxter/.claude/docs/ableton-extensions-sdk/ableton-extensions-sdk-1.0.0-beta.0.tgz"
   },
   "devDependencies": {
     "@ableton-extensions/cli": "file:/Users/noahbaxter/.claude/docs/ableton-extensions-sdk/ableton-extensions-cli-1.0.0-beta.0.tgz",
