@@ -1,60 +1,39 @@
-// File-time <-> beat mapping from a clip's warp markers (the real, possibly
-// non-linear mapping), with a linear-tempo fallback for unwarped clips.
-// Pure math, no SDK — takes a plain marker array so it's easy to test.
+// Maps file-seconds to beats from a clip's warp markers (non-linear), or linear
+// tempo when the clip is unwarped.
+
+const BEAT_EPSILON = 1e-6; // beats this close are the same warp point
 
 export type WarpPt = { sec: number; beat: number };
 
 export interface WarpMap {
-  mode: "warp-markers" | "tempo-fallback";
-  unit: "samples" | "seconds" | "n/a";
-  pts: WarpPt[];
   secToBeat: (s: number) => number;
-  beatToSec: (b: number) => number;
 }
 
-/**
- * Builds a file-second <-> beat mapping from the clip's warp markers. Falls back
- * to linear tempo when a clip has no usable warp markers (unwarped clips).
- * `sampleTime` units are auto-detected: Live may report seconds or samples, so
- * we sniff by magnitude vs the file length.
- */
+// `anchors` pin the curve to the clip's endpoints: Live reports markers for only
+// part of a clip, so without them the curve extrapolates past the clip end. An
+// anchor on the same beat as a real marker is dropped.
 export function buildWarpMap(
   markers: { sampleTime: number; beatTime: number }[],
-  sampleRate: number,
-  fileDurSec: number,
   secPerBeat: number,
+  anchors?: WarpPt[],
 ): WarpMap {
-  if (!markers || markers.length < 2) {
-    return {
-      mode: "tempo-fallback",
-      unit: "n/a",
-      pts: [],
-      secToBeat: (s) => s / secPerBeat,
-      beatToSec: (b) => b * secPerBeat,
-    };
-  }
+  if (!markers || markers.length < 2) return { secToBeat: (s) => s / secPerBeat };
 
-  const maxST = Math.max(...markers.map((m) => m.sampleTime));
-  const inSamples = maxST > fileDurSec * 4;
+  const realBeats = markers.map((m) => m.beatTime);
   const pts: WarpPt[] = markers
-    .map((m) => ({ sec: inSamples ? m.sampleTime / sampleRate : m.sampleTime, beat: m.beatTime }))
+    .map((m) => ({ sec: m.sampleTime, beat: m.beatTime }))
+    .concat((anchors ?? []).filter((a) => !realBeats.some((b) => Math.abs(b - a.beat) < BEAT_EPSILON)))
     .sort((a, b) => a.sec - b.sec);
 
-  const lerp = (x: number, k: "sec" | "beat", v: "sec" | "beat") => {
-    let i = 0;
-    while (i < pts.length - 2 && x > pts[i + 1]![k]) i++;
-    const lo = pts[i]!;
-    const hi = pts[i + 1]!;
-    const span = hi[k] - lo[k];
-    const frac = span === 0 ? 0 : (x - lo[k]) / span;
-    return lo[v] + frac * (hi[v] - lo[v]);
-  };
-
   return {
-    mode: "warp-markers",
-    unit: inSamples ? "samples" : "seconds",
-    pts,
-    secToBeat: (s) => lerp(s, "sec", "beat"),
-    beatToSec: (b) => lerp(b, "beat", "sec"),
+    secToBeat: (s) => {
+      let i = 0;
+      while (i < pts.length - 2 && s > pts[i + 1]!.sec) i++;
+      const lo = pts[i]!;
+      const hi = pts[i + 1]!;
+      const span = hi.sec - lo.sec;
+      const frac = span === 0 ? 0 : (s - lo.sec) / span;
+      return lo.beat + frac * (hi.beat - lo.beat);
+    },
   };
 }

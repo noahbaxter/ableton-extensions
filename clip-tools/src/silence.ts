@@ -1,34 +1,16 @@
-// Gap detection: find the quiet sections (breaths / spaces between words & phrases)
-// and return the SOUND segments in between. Pure DSP, no SDK — operates on decoded
-// PCM so it's easy to reason about and swap the metric later.
-//
-// Detection runs at the FINEST grain (catch every word-level segment). Choosing
-// which gaps actually become cuts is a separate, grain-controlled step in plan.ts.
+// Find quiet gaps (breaths, spaces between words/phrases) and return the SOUND
+// segments between them. Pure DSP on decoded PCM. Runs at the finest grain;
+// plan.ts decides which gaps actually become cuts.
 
 export interface DetectParams {
-  /** Which RMS percentile (0..1) is treated as the recording's noise floor. */
-  noiseFloorPercentile: number;
-  /** How far above the noise floor (dB) still counts as "quiet". Higher = more
-   *  gets treated as a gap, so messier audio still yields cuts. */
-  thresholdMarginDb: number;
-  /** Hard lower bound (linear RMS) for the threshold. On clean audio the noise
-   *  floor is near-zero, so the adaptive term would treat room tone / tails as
-   *  sound and over-segment; this floor keeps clean material sane. The adaptive
-   *  term only takes over when the actual noise floor is higher (noisy audio). */
-  absoluteFloor: number;
-  /** Median-filter width (in windows, odd) applied to the RMS envelope. Removes
-   *  lone loud spikes that would otherwise split a real gap into sub-threshold
-   *  runs and make it disappear. */
-  smoothingWindows: number;
-  /** A quiet stretch must last at least this long (seconds) to be treated as a cut. */
-  minSilenceDuration: number;
-  /** Drop sound segments shorter than this (seconds) — kills tiny fragments. */
-  minSegmentDuration: number;
-  /** Grow each sound segment by this much on each side (seconds) so we keep
-   *  transients / breath tails and don't cut too tight. */
-  padding: number;
-  /** RMS analysis window in samples. */
-  windowSize: number;
+  noiseFloorPercentile: number; // RMS percentile treated as the noise floor
+  thresholdMarginDb: number; // dB above the floor still counted as quiet (higher = more gaps)
+  absoluteFloor: number; // hard RMS floor so near-silent audio doesn't read room tone as sound
+  smoothingWindows: number; // median-filter width (windows) to kill lone spikes inside a gap
+  minSilenceDuration: number; // min quiet stretch (s) to count as a gap
+  minSegmentDuration: number; // drop sound segments shorter than this (s)
+  padding: number; // grow each segment this much (s) per side to keep transients/breath tails
+  windowSize: number; // RMS window, samples
 }
 
 export interface Segment {
@@ -36,10 +18,7 @@ export interface Segment {
   end: number; // seconds
 }
 
-/**
- * Fixed, fine detection settings. Sensitivity no longer lives here — every slice
- * detects the same word-level segments; plan.ts decides how many survive as cuts.
- */
+// Every slice detects the same segments; plan.ts sets the grain.
 export const DETECT_PARAMS: DetectParams = {
   noiseFloorPercentile: 0.1,
   thresholdMarginDb: 9, // ~2.8x the noise floor
@@ -51,7 +30,7 @@ export const DETECT_PARAMS: DetectParams = {
   windowSize: 1024,
 };
 
-/** Per-window RMS across all channels. */
+// per-window RMS across all channels
 function windowRms(channels: Float32Array[], windowSize: number): number[] {
   const length = channels[0]?.length ?? 0;
   const out: number[] = [];
@@ -71,7 +50,7 @@ function windowRms(channels: Float32Array[], windowSize: number): number[] {
   return out;
 }
 
-/** Value at percentile p (0..1) of a list, via nearest-rank on a sorted copy. */
+// value at percentile p (0..1), nearest-rank
 function percentile(values: number[], p: number): number {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -79,7 +58,7 @@ function percentile(values: number[], p: number): number {
   return sorted[idx]!;
 }
 
-/** Sliding median over `width` windows (odd); width <= 1 is a no-op. */
+// sliding median over `width` windows (odd); width <= 1 is a no-op
 function medianFilter(values: number[], width: number): number[] {
   if (width <= 1) return values;
   const h = Math.floor(width / 2);
@@ -90,20 +69,12 @@ function medianFilter(values: number[], width: number): number[] {
   });
 }
 
-/** Result of detection, plus the levels used (for evaluation/logging). */
 export interface Detection {
-  segments: Segment[]; // sound regions to keep, in seconds
-  noiseFloor: number; // measured floor (linear RMS)
-  threshold: number; // the "quiet" cutoff actually used (linear RMS)
+  segments: Segment[]; // sound regions to keep, seconds
+  noiseFloor: number; // measured floor, linear RMS
+  threshold: number; // "quiet" cutoff used, linear RMS
 }
 
-/**
- * Returns the SOUND segments (the parts to keep as individual clips), in seconds,
- * plus the detection levels used. Found by locating qualifying silence gaps and
- * taking the audio between them. The "quiet" threshold is adaptive — a margin
- * above the measured noise floor, bounded below by an absolute floor — so gaps
- * are caught on clean and noisy recordings alike without over-segmenting.
- */
 export function detectSoundSegments(
   channels: Float32Array[],
   sampleRate: number,
@@ -119,14 +90,12 @@ export function detectSoundSegments(
 
   const rms = medianFilter(windowRms(channels, p.windowSize), p.smoothingWindows);
 
-  // Adaptive threshold: sit `thresholdMarginDb` above the noise floor, so "quiet"
-  // means quiet relative to THIS recording — but never below `absoluteFloor`, so
-  // a pristine clip (floor ~0) doesn't treat room tone as sound.
+  // quiet = a margin above the noise floor, but never below absoluteFloor
   const noiseFloor = percentile(rms, p.noiseFloorPercentile);
   const threshold = Math.max(noiseFloor * Math.pow(10, p.thresholdMarginDb / 20), p.absoluteFloor);
   const quiet = rms.map((v) => v < threshold);
 
-  // Collect qualifying silence gaps (runs of quiet windows that are long enough).
+  // runs of quiet windows long enough to qualify as a gap
   const gaps: Segment[] = [];
   let runStart = -1;
   for (let i = 0; i <= quiet.length; i++) {
@@ -141,7 +110,7 @@ export function detectSoundSegments(
     }
   }
 
-  // Sound = the timeline minus the gaps.
+  // sound = the timeline minus the gaps
   const sounds: Segment[] = [];
   let cursor = 0;
   for (const g of gaps) {
@@ -150,7 +119,7 @@ export function detectSoundSegments(
   }
   if (cursor < totalDur) sounds.push({ start: cursor, end: totalDur });
 
-  // Pad, clamp, drop fragments, then merge any segments that now overlap.
+  // pad, clamp, drop fragments, then merge any segments that now overlap
   const padded = sounds
     .map((s) => ({
       start: Math.max(0, s.start - p.padding),
