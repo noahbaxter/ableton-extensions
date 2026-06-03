@@ -10,11 +10,10 @@ import {
 import * as fs from "node:fs/promises";
 
 import { detectSoundSegments } from "./silence.js";
-import { buildWarpMap } from "./warp.js";
 import { planPieces } from "./plan.js";
 
-// Verbose evaluation logging (detection levels, gap distribution, read-back).
-// Flip to false once the grain/detection tuning feels right.
+// Evaluation logging (detection levels, gap distribution, create read-back).
+// Flip to false once placement is solid for both warped and unwarped clips.
 const DEBUG = true;
 const dbg = (...a: unknown[]) => {
   if (DEBUG) console.log("[clip-tools]", ...a);
@@ -34,8 +33,8 @@ async function decode(filePath: string) {
 // Splits the clip into contiguous pieces at the quiet gaps between phrases.
 // Nothing is removed: cuts land in the MIDDLE of each gap, so every piece keeps
 // its audio (plus a little silence padding) and the timeline stays fully tiled
-// in its original position. File<->beat mapping uses the clip's warp markers
-// (real, possibly non-linear), falling back to constant tempo when unwarped.
+// in its original position. New-piece markers are passed as file-seconds; see
+// the mapping note below and CUT_DETECTION_STRATEGY.md.
 // ---------------------------------------------------------------------------
 
 // Each level is a keepFraction (see planPieces): the fraction of gaps that
@@ -80,49 +79,24 @@ async function sliceClip(context: Ctx, handle: Handle, keepFraction: number) {
     return;
   }
 
-  // Cache anything we log AFTER the clear: clearClipsInRange removes this clip,
-  // so the handle is dangling by read-back time and its getters throw.
-  const clipName = clip.name;
-
   const secPerBeat = 60 / context.application.song.tempo;
   const decoded = await decode(clip.filePath);
   const channels = Array.from({ length: decoded.numberOfChannels }, (_, i) =>
     decoded.getChannelData(i),
   );
 
-  const warp = buildWarpMap(clip.warpMarkers, decoded.sampleRate, decoded.duration, secPerBeat);
-
-  // Two coordinate systems for the new pieces' markers, chosen by warp state:
-  //
-  //  - Warped clip: the real warp markers give the (possibly non-linear)
-  //    seconds<->beat map, and content beats align to arrangement beats 1:1.
-  //
-  //  - Unwarped clip: read-back PROVES Live places a new unwarped clip's beat-0
-  //    warp marker at the FILE-SECOND equal to the startMarker value we pass
-  //    (send 8.195 → warp marker lands at 8.195s). So for unwarped clips the
-  //    marker value is literally a file-second, not a beat in any tempo grid.
-  //    Pass seconds directly (identity). buildWarpMap / the clip's own native
-  //    beat grid (e.g. 32 beats over 21.943s) is only used to locate the content
-  //    WINDOW in seconds; it must NOT scale the marker values, or Live reads the
-  //    too-large beat numbers as seconds past the file end and clamps + stretches.
+  // New-piece markers are passed as plain FILE-SECONDS (identity): read-back
+  // proves Live anchors a new clip's beat-0 warp marker at the file-second equal
+  // to the startMarker value we pass, so the marker is a second, not a beat in
+  // any tempo grid. The clip's geometry only maps its native markers -> the
+  // file-seconds it plays, to bound the detection window. (Warped clips still
+  // mis-play because Live auto-warps the new clip — see CUT_DETECTION_STRATEGY.md.)
   const arrSpan = clip.endTime - clip.startTime;
   const markerSpan = clip.endMarker - clip.startMarker;
-
-  let secToMarker: (s: number) => number;
-  let markerToSec: (m: number) => number;
-  let markerToArrangement: number;
-  if (clip.warping) {
-    secToMarker = warp.secToBeat;
-    markerToSec = warp.beatToSec;
-    markerToArrangement = markerSpan !== 0 ? arrSpan / markerSpan : 1;
-  } else {
-    // Geometry maps the clip's native markers -> the file-seconds it plays, just
-    // to bound the detection window; the new pieces' markers are plain seconds.
-    const secPerMarker = markerSpan !== 0 ? (arrSpan * secPerBeat) / markerSpan : secPerBeat;
-    markerToSec = (m) => m * secPerMarker;
-    secToMarker = (s) => s; // marker value == file second
-    markerToArrangement = 1 / secPerBeat; // arrangement beats per content second
-  }
+  const secPerMarker = markerSpan !== 0 ? (arrSpan * secPerBeat) / markerSpan : secPerBeat;
+  const markerToSec = (m: number) => m * secPerMarker;
+  const secToMarker = (s: number) => s; // marker value == file second
+  const markerToArrangement = 1 / secPerBeat; // arrangement beats per content second
 
   const startSec = markerToSec(clip.startMarker);
   const endSec = markerToSec(clip.endMarker);
@@ -142,25 +116,20 @@ async function sliceClip(context: Ctx, handle: Handle, keepFraction: number) {
   );
 
   // ---- evaluation logging ------------------------------------------------
-  dbg(`"${clip.name}" keepFraction=${keepFraction}`);
   dbg(
-    `  geom: warping=${clip.warping}  ` +
-      `mapping=${clip.warping ? "warp-beats" : "seconds-as-markers"}  ` +
+    `slice "${clip.name}" keepFraction=${keepFraction}  warping=${clip.warping}  ` +
       `arr ${f(clip.startTime)}..${f(clip.endTime)}  markers ${f(clip.startMarker)}..${f(clip.endMarker)}  ` +
-      `file ${f(decoded.duration)}s  window-sec ${f(startSec)}..${f(endSec)}  ` +
-      `markerToArr=${f(markerToArrangement)}`,
+      `file ${f(decoded.duration)}s  window-sec ${f(startSec)}..${f(endSec)}`,
   );
   dbg(
-    `  detect: floor ${f(db(detection.noiseFloor), 1)}dB  ` +
-      `threshold ${f(db(detection.threshold), 1)}dB  ` +
-      `${detection.segments.length} sound segments → ${gaps.length} gaps`,
+    `  detect: floor ${f(db(detection.noiseFloor), 1)}dB threshold ${f(db(detection.threshold), 1)}dB  ` +
+      `${detection.segments.length} segments → ${gaps.length} gaps`,
   );
   if (gaps.length) {
-    const cut = gaps.filter((g) => g.kept).length;
     const sorted = [...gaps].sort((a, b) => b.durSec - a.durSec);
     dbg(
-      `  cuts: ${cut}/${gaps.length} gaps kept → ${pieces.length} pieces. ` +
-        `gap durations (s, desc): ${sorted.map((g) => (g.kept ? "▸" : "") + f(g.durSec, 2)).join(" ")}`,
+      `  cuts: ${gaps.filter((g) => g.kept).length}/${gaps.length} kept → ${pieces.length} pieces  ` +
+        `gaps(s): ${sorted.map((g) => (g.kept ? "▸" : "") + f(g.durSec, 2)).join(" ")}`,
     );
   }
 
@@ -177,7 +146,12 @@ async function sliceClip(context: Ctx, handle: Handle, keepFraction: number) {
   // — audio clip creation can't collapse, MIDI clips can), so this currently
   // yields N+1 undo steps and becomes one for free once the SDK is fixed.
   // withinProgressDialog here is only the progress UI, not undo-related.
-  const isWarped = clip.warping;
+  // Always CREATE unwarped: that path places the right content at the right spot
+  // (markers == file-seconds, file tempo preserved). Creating warped instead lets
+  // Live auto-warp the new clip to a bogus grid and misread our second-markers.
+  // For a warped source we then flip warp back ON per piece — enabling warp on an
+  // already-correct clip changes tempo-follow, not which audio region it plays.
+  const sourceWarped = clip.warping;
   await context.ui.withinProgressDialog("Slicing clip…", {}, async (update) => {
     await update(`Slicing into ${pieces.length} clips…`, 50);
     const results = await context.withinTransaction(() =>
@@ -189,9 +163,9 @@ async function sliceClip(context: Ctx, handle: Handle, keepFraction: number) {
               filePath: p.filePath,
               startTime: p.startTime,
               duration: p.duration,
-              isWarped,
+              isWarped: false,
               loopSettings: {
-                looping: isWarped,
+                looping: false,
                 startMarker: p.startMarker,
                 endMarker: p.endMarker,
                 loopStart: p.startMarker,
@@ -205,28 +179,31 @@ async function sliceClip(context: Ctx, handle: Handle, keepFraction: number) {
         ),
       ]),
     );
+    const created = results.slice(1) as (AudioClip<"1.0.0"> | null)[];
 
-    // ---- read back: intended vs what Live actually created (warp correctness) ----
-    // global = arrangement position; in-clip = content offset into the sample.
-    // A "✗" flags where the two diverge (the start-marker shuffle bug).
+    // Restore warp on the (correctly-placed) unwarped pieces for a warped source.
+    if (sourceWarped) {
+      await update("Restoring warp…", 80);
+      await context.withinTransaction(() => {
+        for (const c of created) if (c) c.warping = true;
+        return Promise.resolve();
+      });
+    }
+
+    // ---- read back: intended vs what Live actually created ----
+    // in-clip = content offset into the sample. "✗" = markers diverge. The new
+    // clip's warp markers (wm) reveal the grid Live assigned — the key signal for
+    // the warped case, where Live auto-warps and our second-markers get misread.
     if (DEBUG) {
-      const created = results.slice(1) as (AudioClip<"1.0.0"> | null)[];
-      dbg(`read-back "${clipName}" (intended → actual):`);
+      dbg(`  read-back (intended → actual):`);
       created.forEach((c, i) => {
         const p = pieces[i]!;
-        if (!c) return dbg(`  [${i}] FAILED`);
-        const ok = Math.abs(c.startMarker - p.startMarker) < 1e-3;
-        // The created clip's OWN ratio (arr duration / marker span) reveals which
-        // beat grid Live actually gave it — the missing fact for the marker units.
-        const cMarkerSpan = c.endMarker - c.startMarker;
-        const cRatio = cMarkerSpan !== 0 ? c.duration / cMarkerSpan : NaN;
+        if (!c) return dbg(`    [${i}] FAILED`);
+        const ok = Math.abs(c.startMarker - p.startMarker) < 1e-3 ? "✓" : "✗";
         dbg(
-          `  [${i}] ${ok ? "✓" : "✗"} global-start ${f(p.startTime)}→${f(c.startTime)}  ` +
-            `in-clip-start ${f(p.startMarker)}→${f(c.startMarker)}  ` +
-            `(in-clip-end ${f(p.endMarker)}→${f(c.endMarker)}  dur ${f(p.duration)}→${f(c.duration)})  ` +
-            `[new clip: warping=${c.warping} dur/markerSpan=${f(cRatio)} ` +
-            `loop=${c.looping}/${f(c.loopStart)}..${f(c.loopEnd)} ` +
-            `wm=${c.warpMarkers.map((m) => `(${f(m.sampleTime)},${f(m.beatTime)})`).join("")}]`,
+          `    [${i}] ${ok} arr ${f(p.startTime)}→${f(c.startTime)}  ` +
+            `in-clip ${f(p.startMarker)}→${f(c.startMarker)}..${f(c.endMarker)}  ` +
+            `[new warp=${c.warping} wm=${c.warpMarkers.map((m) => `(${f(m.sampleTime, 2)},${f(m.beatTime, 2)})`).join("")}]`,
         );
       });
     }
