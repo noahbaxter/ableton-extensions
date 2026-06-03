@@ -18,15 +18,15 @@ export function activate(activation: ActivationContext) {
 
   // Interactive Slice & Strip popup — windowed to the time selection, across every
   // clip it overlaps
-  registerClipifyCommand(context, "clipify.sliceStrip", "Clipify…", (targets) =>
+  registerClipifyCommand(context, "clipify.sliceStrip", "Config", (targets) =>
     runSliceStrip(context, targets),
   );
 
   // Headless commands — apply the portion(s) with the last-saved settings, no popup
   const headless: { id: string; label: string; portions: Portions }[] = [
-    { id: "clipify.split", label: "Clipify – Split", portions: { split: true, strip: false } },
-    { id: "clipify.strip", label: "Clipify – Strip", portions: { split: false, strip: true } },
-    { id: "clipify.quick", label: "Clipify Quick", portions: { split: true, strip: true } },
+    { id: "clipify.split", label: "Split", portions: { split: true, strip: false } },
+    { id: "clipify.strip", label: "Strip", portions: { split: false, strip: true } },
+    { id: "clipify.quick", label: "Auto", portions: { split: true, strip: true } },
   ];
   for (const { id, label, portions } of headless) {
     registerClipifyCommand(context, id, label, (targets) => runHeadless(context, targets, portions));
@@ -39,13 +39,13 @@ export function activate(activation: ActivationContext) {
     const hit = clipUnderCursor(context, sel);
     if (hit) {
       void splitAtZeroCrossing(context, hit.clip, hit.track, hit.point).catch((e) =>
-        console.error("[clipify]", e),
+        console.error("[clipify] splitZero:", fmtErr(e)),
       );
     }
   });
   context.ui.registerContextMenuAction(
     "AudioTrack.ArrangementSelection",
-    "Split at Nearest 0 Crossing",
+    "Split 0-cross",
     "clipify.splitZero",
   );
 }
@@ -61,9 +61,16 @@ function registerClipifyCommand(
 ): void {
   context.commands.registerCommand(id, (arg: unknown) => {
     const targets = resolveTargets(context, arg);
-    if (targets.length) void run(targets).catch((e) => console.error("[clipify]", e));
+    console.log(`[clipify] ${id}: ${targets.length} target(s)`);
+    if (targets.length) void run(targets).catch((e) => console.error(`[clipify] ${id}:`, fmtErr(e)));
   });
   context.ui.registerContextMenuAction("AudioTrack.ArrangementSelection", label, id);
+}
+
+// console.error on a raw rejection prints "undefined" when the value isn't an Error;
+// surface the type/stack so failures are diagnosable.
+function fmtErr(e: unknown): string {
+  return e instanceof Error ? (e.stack ?? e.message) : `non-Error rejection: ${typeof e} → ${String(e)}`;
 }
 
 function asSelection(arg: unknown): ArrangementSelection | null {
