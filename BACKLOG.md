@@ -5,7 +5,6 @@
 - Non-blocking / floating popup — blocked: SDK only has modal showModalDialog
 - Ripple-delete stripped silence — blocked: no clip-move API (would need to recreate clips)
 - Name the undo entry (shows "Custom Action") — blocked: withinTransaction takes no label
-- Consolidate selection logic — popup.html selectCuts and select.ts duplicate it
 - Fades into stripped silence — blocked: SDK 1.0.0 has no fade API
 - Multi-clip time selections — only handles the clip under the selection start
 - Nest context-menu items under a submenu — blocked: SDK menus are flat

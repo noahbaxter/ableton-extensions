@@ -1,6 +1,6 @@
 // Find quiet gaps (breaths, spaces between words/phrases) and return the SOUND
-// segments between them. Pure DSP on decoded PCM. Runs at the finest grain;
-// plan.ts decides which gaps actually become cuts.
+// segments between them. Pure DSP on decoded PCM, at the finest grain;
+// candidates.ts turns the gaps into the actual cut/strip candidates.
 
 export interface DetectParams {
   noiseFloorPercentile: number; // RMS percentile treated as the noise floor
@@ -18,7 +18,6 @@ export interface Segment {
   end: number; // seconds
 }
 
-// Every slice detects the same segments; plan.ts sets the grain.
 export const DETECT_PARAMS: DetectParams = {
   noiseFloorPercentile: 0.1,
   thresholdMarginDb: 9, // ~2.8x the noise floor
