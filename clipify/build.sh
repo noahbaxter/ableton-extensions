@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build/run the Clip Tools extension.
+# Build/run the Clipify extension.
 #
 #   ./build.sh            Build the distributable .ablx (production, minified)
 #   ./build.sh dev        Dev bundle only (sourcemaps, no .ablx)
@@ -51,7 +51,7 @@ echo "Using node $(node -v)"
 [ -d node_modules ] || { echo "Installing dependencies..."; npm install; }
 
 case "${1:-package}" in
-  package) npm run package; echo "Built: $PWD/dist/clip-tools.ablx" ;;
+  package) npm run package; echo "Built: $PWD/dist/clipify.ablx" ;;
   dev)     npm run build:dev ;;
   run)     npm start ;;
   *)       echo "usage: ./build.sh [package|dev|run]" >&2; exit 2 ;;

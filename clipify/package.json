@@ -1,11 +1,12 @@
 {
+  "name": "clipify",
   "type": "module",
   "main": "dist/extension.js",
   "scripts": {
     "build": "tsc --noEmit && tsx build.ts --production",
     "build:dev": "tsc --noEmit && tsx build.ts",
     "start": "tsx build.ts && extensions-cli run",
-    "package": "npm run build && extensions-cli package -o dist/clip-tools.ablx"
+    "package": "npm run build && extensions-cli package -o dist/clipify.ablx"
   },
   "dependencies": {
     "@ableton-extensions/sdk": "file:/Users/noahbaxter/.claude/docs/ableton-extensions-sdk/ableton-extensions-sdk-1.0.0-beta.0.tgz",

@@ -1,5 +1,5 @@
 {
-    "name": "Clip Tools",
+    "name": "Clipify",
     "author": "Dichotic Studios",
     "entry": "dist/extension.js",
     "version": "0.0.1",

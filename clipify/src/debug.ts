@@ -4,7 +4,7 @@
 export class Debug {
   constructor(
     readonly enabled: boolean,
-    private readonly tag = "[clip-tools]",
+    private readonly tag = "[clipify]",
   ) {}
 
   log(...parts: unknown[]): void {
