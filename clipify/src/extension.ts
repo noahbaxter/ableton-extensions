@@ -5,7 +5,6 @@ import {
   DataModelObject,
   type ActivationContext,
   type ArrangementSelection,
-  type Handle,
 } from "@ableton-extensions/sdk";
 
 import { runSliceStrip, runHeadless, type Target } from "./slicer.js";
@@ -17,8 +16,8 @@ type Ctx = ReturnType<typeof initialize>;
 export function activate(activation: ActivationContext) {
   const context = initialize(activation, "1.0.0");
 
-  // Interactive Slice & Strip popup — from a clip or a time selection within one
-  registerOnClipAndSelection(context, "clipify.sliceStrip", "Clipify…", (target) =>
+  // Interactive Slice & Strip popup — whole clip, or windowed to a time selection
+  registerClipifyCommand(context, "clipify.sliceStrip", "Clipify…", (target) =>
     runSliceStrip(context, target),
   );
 
@@ -29,7 +28,7 @@ export function activate(activation: ActivationContext) {
     { id: "clipify.quick", label: "Clipify Quick", portions: { split: true, strip: true } },
   ];
   for (const { id, label, portions } of headless) {
-    registerOnClipAndSelection(context, id, label, (target) => runHeadless(context, target, portions));
+    registerClipifyCommand(context, id, label, (target) => runHeadless(context, target, portions));
   }
 
   // Standalone split at nearest zero crossing — cursor only, not a time range
@@ -50,9 +49,10 @@ export function activate(activation: ActivationContext) {
   );
 }
 
-// Register a command on both the AudioClip and the time-selection scopes, resolving
-// the right-clicked target before running.
-function registerOnClipAndSelection(
+// Register a command once, on the arrangement time-selection scope. One menu entry,
+// unified behaviour: a time selection windows the action; just a cursor (no range)
+// targets the whole clip.
+function registerClipifyCommand(
   context: Ctx,
   id: string,
   label: string,
@@ -62,17 +62,7 @@ function registerOnClipAndSelection(
     const target = resolveTarget(context, arg);
     if (target) void run(target).catch((e) => console.error("[clipify]", e));
   });
-  context.ui.registerContextMenuAction("AudioClip", label, id);
   context.ui.registerContextMenuAction("AudioTrack.ArrangementSelection", label, id);
-}
-
-function walkToTrack(obj: DataModelObject<"1.0.0">): AudioTrack<"1.0.0"> | null {
-  let cur: DataModelObject<"1.0.0"> | null = obj.parent;
-  while (cur) {
-    if (cur instanceof AudioTrack) return cur;
-    cur = cur.parent;
-  }
-  return null;
 }
 
 function asSelection(arg: unknown): ArrangementSelection | null {
@@ -103,28 +93,19 @@ function clipUnderCursor(
   return null;
 }
 
-// Either a time selection (window to the range, or the whole clip if just a
-// cursor) or a clip handle (whole clip).
+// Clipify needs a real time selection — windowed to its range (selecting the clip
+// head gives the whole clip). A bare cursor (no range) does nothing here; that's
+// what Split at Nearest 0 Crossing is for.
 function resolveTarget(context: Ctx, arg: unknown): Target | null {
   const sel = asSelection(arg);
-  if (sel) {
-    const hit = clipUnderCursor(context, sel);
-    if (!hit) return null;
-    const { clip, track } = hit;
-    const hasRange = sel.time_selection_end > sel.time_selection_start;
-    return {
-      clip,
-      track,
-      winStartBeat: hasRange ? Math.max(clip.startTime, sel.time_selection_start) : clip.startTime,
-      winEndBeat: hasRange ? Math.min(clip.endTime, sel.time_selection_end) : clip.endTime,
-    };
-  }
-
-  const clip = context.getObjectFromHandle(arg as Handle, AudioClip);
-  const track = walkToTrack(clip);
-  if (!track) {
-    console.error(`[clipify] couldn't find the AudioTrack owning clip "${clip.name}".`);
-    return null;
-  }
-  return { clip, track, winStartBeat: clip.startTime, winEndBeat: clip.endTime };
+  if (!sel || !(sel.time_selection_end > sel.time_selection_start)) return null;
+  const hit = clipUnderCursor(context, sel);
+  if (!hit) return null;
+  const { clip, track } = hit;
+  return {
+    clip,
+    track,
+    winStartBeat: Math.max(clip.startTime, sel.time_selection_start),
+    winEndBeat: Math.min(clip.endTime, sel.time_selection_end),
+  };
 }

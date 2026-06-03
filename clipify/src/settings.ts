@@ -10,6 +10,7 @@ export interface Settings {
   sensMacro: number; // 0..1, MACRO's own sensitivity
   sensMicro: number; // 0..1, MICRO's own sensitivity
   strip: "off" | "deactivate" | "delete";
+  thresh: "silence" | "quiet" | "content"; // what the strip targets
   silence: number; // 0..1, strip-zone extent
 }
 
@@ -19,6 +20,7 @@ const DEFAULTS: Settings = {
   sensMacro: 0.5,
   sensMicro: 0.7,
   strip: "off",
+  thresh: "quiet",
   silence: 0.5,
 };
 

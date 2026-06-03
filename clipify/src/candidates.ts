@@ -1,53 +1,53 @@
-// Turn detected gaps into cut candidates the popup can select from.
+// Turn detected gaps into cut candidates the popup/commands select from.
 //
-// For each gap between two sound segments we precompute:
-//   - how long it is and how deep it goes (the popup ranks on these),
-//   - whether it contains a real noise-floor stretch (so it can be stripped),
-//   - the slice point, the deep-silence extent, and the full gap bounds — in BOTH
-//     window fractions (for the canvas) and arrangement beats (for applying).
-//
-// The popup's silence-sensitivity slider grows the strip region from the deep
-// extent (just the dead-quiet middle) out toward the full gap (right up to the
-// neighbouring notes), so it lives between the deep and gap bounds we hand it.
+// For each gap between two sound segments we precompute its silence extent at two
+// thresholds — QUIET (down to the noise floor) and SILENCE (true digital silence,
+// ~-60 dB) — in both window fractions (canvas) and arrangement beats (applying).
+// The active threshold drives BOTH the split cut and the strip zone, so they stay
+// locked together. CONTENT mode reuses the QUIET extents but strips the sound
+// between them instead of the silence.
 //
 // Cut placement keeps a note's decay tail with that note and the pre-note
 // breath/noise with the FOLLOWING note: the slice sits at the start of the deep
-// silence, so everything after it — the silence and the inhale before the next
-// transient — rides forward.
+// silence, so everything after it rides forward.
 
 import type { Detection } from "./silence.js";
 import { snapToZeroCrossing } from "./zeroCross.js";
 
-const DEEP_MARGIN_DB = 9; // RMS within this of the noise floor counts as true silence
+const QUIET_MARGIN_DB = 9; // RMS within this of the noise floor counts as "quiet"
+const SILENCE_LEVEL = Math.pow(10, -78 / 20); // ~-78 dBFS — digital silence; room tone passes
 const MIN_DEEP_SEC = 0.03; // a deep stretch shorter than this isn't worth stripping
+
+// silence extent at one threshold, resolved to fractions and beats
+export interface Extent {
+  hasDeep: boolean; // a real silence stretch exists at this threshold
+  cutFrac: number; // silence start (slice point); midpoint when no silence
+  deepEndFrac: number; // silence end
+  cutBeat: number;
+  deepEndBeat: number;
+}
 
 export interface Candidate {
   durSec: number; // gap length
-  hasDeep: boolean; // gap holds a real noise-floor stretch (strippable)
   edge: boolean; // leading/trailing silence (window edge) — stripped, never plain-sliced
-  // window fractions [0,1]
-  cutFrac: number; // slice point = start of the deep silence
-  deepEndFrac: number; // end of the deep silence
   gapStartFrac: number; // gap start = previous note's edge
   gapEndFrac: number; // gap end = next note's edge
-  // arrangement beats
-  cutBeat: number;
-  deepEndBeat: number;
   gapStartBeat: number;
   gapEndBeat: number;
+  quiet: Extent; // noise-floor silence
+  silence: Extent; // true digital silence
 }
 
 interface Window {
-  startSec: number; // file-second of the operating window start
-  endSec: number; // file-second of the operating window end
+  startSec: number;
+  endSec: number;
   secToArrBeat: (s: number) => number;
   channels: Float32Array[]; // PCM, for zero-crossing snapping
   sampleRate: number;
 }
 
-// extent of the silence inside a gap: first..last window at/below `thresh`.
-// Unlike a longest-contiguous-run, this tolerates brief blips (a click, a stray
-// breath) so the whole quiet span is treated as one region instead of slivers.
+// extent of the silence inside a gap: first..last window at/below `thresh`. Unlike a
+// longest-contiguous-run, this tolerates brief blips so the whole quiet span is one region.
 function deepExtent(
   rms: number[],
   windowDur: number,
@@ -76,7 +76,21 @@ export function buildCandidates(detection: Detection, win: Window): Candidate[] 
   const span = win.endSec - win.startSec || 1;
   const frac = (s: number) => (s - win.startSec) / span;
   const snap = (s: number) => snapToZeroCrossing(win.channels, win.sampleRate, s);
-  const deepThresh = noiseFloor * Math.pow(10, DEEP_MARGIN_DB / 20);
+  const quietThresh = noiseFloor * Math.pow(10, QUIET_MARGIN_DB / 20);
+
+  const extentAt = (gapStart: number, gapEnd: number, thresh: number): Extent => {
+    const ext = deepExtent(rms, windowDur, gapStart, gapEnd, thresh);
+    const hasDeep = !!ext && ext.end - ext.start >= MIN_DEEP_SEC;
+    const cutSec = snap(hasDeep ? ext!.start : (gapStart + gapEnd) / 2);
+    const deepEndSec = hasDeep ? snap(ext!.end) : cutSec;
+    return {
+      hasDeep,
+      cutFrac: frac(cutSec),
+      deepEndFrac: frac(deepEndSec),
+      cutBeat: win.secToArrBeat(cutSec),
+      deepEndBeat: win.secToArrBeat(deepEndSec),
+    };
+  };
 
   // sound segments clipped to the operating window
   const segs = segments
@@ -84,9 +98,7 @@ export function buildCandidates(detection: Detection, win: Window): Candidate[] 
     .filter((s) => s.end - s.start > 0);
   if (!segs.length) return [];
 
-  // gaps to consider: leading silence (window → first sound), the gaps between
-  // sounds, and trailing silence (last sound → window). The edge gaps are how we
-  // catch silence at the very start and end, not just between cut points.
+  // gaps: leading silence (window → first sound), gaps between sounds, trailing silence
   const gaps: { start: number; end: number; edge: boolean }[] = [];
   if (segs[0]!.start - win.startSec >= MIN_DEEP_SEC) {
     gaps.push({ start: win.startSec, end: segs[0]!.start, edge: true });
@@ -101,37 +113,19 @@ export function buildCandidates(detection: Detection, win: Window): Candidate[] 
 
   const out: Candidate[] = [];
   for (const gap of gaps) {
-    const gapStart = gap.start;
-    const gapEnd = gap.end;
-    const durSec = gapEnd - gapStart;
+    const durSec = gap.end - gap.start;
     if (durSec <= 0) continue;
-
-    const ext = deepExtent(rms, windowDur, gapStart, gapEnd, deepThresh);
-    const hasDeep = !!ext && ext.end - ext.start >= MIN_DEEP_SEC;
-
-    // slice at the start of the silence (keeps prev tail, gives breath to next note);
-    // with no real silence (close events), fall back to the gap midpoint. Snap every
-    // boundary to the nearest zero crossing so splits don't click.
-    const cutSec = snap(hasDeep ? ext!.start : (gapStart + gapEnd) / 2);
-    const deepEndSec = hasDeep ? snap(ext!.end) : cutSec;
-    const gapStartSec = snap(gapStart);
-    const gapEndSec = snap(gapEnd);
-
-    // a normal slice must land inside the window; edge gaps own the window border
-    if (!gap.edge && (cutSec <= win.startSec || cutSec >= win.endSec)) continue;
-
+    const gapStartSec = snap(gap.start);
+    const gapEndSec = snap(gap.end);
     out.push({
       durSec,
-      hasDeep,
       edge: gap.edge,
-      cutFrac: frac(cutSec),
-      deepEndFrac: frac(deepEndSec),
       gapStartFrac: frac(gapStartSec),
       gapEndFrac: frac(gapEndSec),
-      cutBeat: win.secToArrBeat(cutSec),
-      deepEndBeat: win.secToArrBeat(deepEndSec),
       gapStartBeat: win.secToArrBeat(gapStartSec),
       gapEndBeat: win.secToArrBeat(gapEndSec),
+      quiet: extentAt(gap.start, gap.end, quietThresh),
+      silence: extentAt(gap.start, gap.end, SILENCE_LEVEL),
     });
   }
   return out;

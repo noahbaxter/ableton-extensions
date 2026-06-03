@@ -39,7 +39,16 @@
       }
       .seg button:last-child { border-right: 0; }
       .seg button.on { background: #4a4a4a; color: var(--text); }
-      input[type=range] { flex: 1; accent-color: var(--accent); margin: 0; }
+      /* custom-painted track so the fill keeps its colour when the window is inactive
+         (accent-color greys out on blur) */
+      input[type=range] { flex: 1; margin: 0; height: 14px; cursor: pointer; -webkit-appearance: none; appearance: none; background: transparent; }
+      input[type=range]::-webkit-slider-runnable-track {
+        height: 4px; border-radius: 2px;
+        background: linear-gradient(to right, var(--accent) 0 var(--fill, 50%), #3a3a3a var(--fill, 50%) 100%);
+      }
+      input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none; margin-top: -4px; width: 12px; height: 12px; border-radius: 50%; background: #d8d8d8;
+      }
       .hide { display: none; }
       .foot { margin-top: auto; display: flex; justify-content: flex-end; gap: 8px; }
       .foot button { appearance: none; border: 0; border-radius: 5px; padding: 7px 16px; font: inherit; cursor: pointer; }
@@ -91,6 +100,15 @@
         </div>
       </div>
 
+      <div class="ctl hide" id="thresh-row">
+        <label>Target</label>
+        <div class="seg" id="thresh">
+          <button data-val="silence">Silence</button>
+          <button data-val="quiet">Quiet</button>
+          <button data-val="content">Content</button>
+        </div>
+      </div>
+
       <div class="ctl hide" id="silence-row">
         <label>Silence</label>
         <input type="range" id="silence" min="0" max="1" step="0.01" />
@@ -109,6 +127,7 @@
         mode: DATA.defaults.mode,
         cutAt: DATA.defaults.cutAt,
         strip: DATA.defaults.strip,
+        thresh: DATA.defaults.thresh,
         sensMacro: DATA.defaults.sensMacro,
         sensMicro: DATA.defaults.sensMicro,
         silence: DATA.defaults.silence,
@@ -135,57 +154,63 @@
         var sil = state.silence; // 0.5 = the detected silence (== the split cut)
         var cutBeats = [], strips = [], drawCuts = [], drawStrips = [];
         var EPS = 0.001;
+        var stripping = state.strip !== "off";
 
-        // strip zone for a candidate, centred on the deep-silence extent (where the
-        // split cut lands): below 0.5 it shrinks inward, above 0.5 it extends out
-        // toward the neighbouring notes.
-        function zone(c) {
+        var eligible = DATA.candidates.filter(function (c) {
+          return c.edge || (c.durSec >= thresh && (state.mode !== "MACRO" || c.quiet.hasDeep));
+        });
+
+        // strip zone, centred on the active threshold's silence extent (where the split
+        // cut lands): below 0.5 shrinks inward, above 0.5 extends toward the notes.
+        function pushZone(c, ext) {
+          var b0, b1, f0, f1;
           if (sil >= 0.5) {
             var u = (sil - 0.5) / 0.5;
-            return {
-              b0: lerp(c.cutBeat, c.gapStartBeat, u), b1: lerp(c.deepEndBeat, c.gapEndBeat, u),
-              f0: lerp(c.cutFrac, c.gapStartFrac, u), f1: lerp(c.deepEndFrac, c.gapEndFrac, u),
-            };
+            b0 = lerp(ext.cutBeat, c.gapStartBeat, u); b1 = lerp(ext.deepEndBeat, c.gapEndBeat, u);
+            f0 = lerp(ext.cutFrac, c.gapStartFrac, u); f1 = lerp(ext.deepEndFrac, c.gapEndFrac, u);
+          } else {
+            var k = ((0.5 - sil) / 0.5) * 0.7;
+            var mB = (ext.cutBeat + ext.deepEndBeat) / 2, mF = (ext.cutFrac + ext.deepEndFrac) / 2;
+            b0 = lerp(ext.cutBeat, mB, k); b1 = lerp(ext.deepEndBeat, mB, k);
+            f0 = lerp(ext.cutFrac, mF, k); f1 = lerp(ext.deepEndFrac, mF, k);
           }
-          var k = ((0.5 - sil) / 0.5) * 0.7; // shrink up to 70% toward the middle
-          var mB = (c.cutBeat + c.deepEndBeat) / 2, mF = (c.cutFrac + c.deepEndFrac) / 2;
-          return {
-            b0: lerp(c.cutBeat, mB, k), b1: lerp(c.deepEndBeat, mB, k),
-            f0: lerp(c.cutFrac, mF, k), f1: lerp(c.deepEndFrac, mF, k),
-          };
-        }
-        function pushStrip(c) {
-          var z = zone(c);
-          cutBeats.push(z.b0, z.b1);
-          strips.push({ start: z.b0, end: z.b1 });
-          drawCuts.push(z.f0, z.f1);
-          drawStrips.push({ f0: z.f0, f1: z.f1 });
-        }
-        // split (no strip): cut the chosen phrase edges around the silence — phrase
-        // END is the silence start (cutBeat), phrase START is the silence end
-        // (deepEndBeat); skip a boundary that sits on the window edge.
-        var atEnd = state.cutAt !== "start";
-        var atStart = state.cutAt !== "end";
-        function pushSplit(c) {
-          if (!c.hasDeep) { cutBeats.push(c.cutBeat); drawCuts.push(c.cutFrac); return; }
-          if (atEnd && c.cutFrac > EPS) { cutBeats.push(c.cutBeat); drawCuts.push(c.cutFrac); }
-          if (atStart && c.deepEndFrac < 1 - EPS) { cutBeats.push(c.deepEndBeat); drawCuts.push(c.deepEndFrac); }
+          cutBeats.push(b0, b1); strips.push({ start: b0, end: b1 });
+          drawCuts.push(f0, f1); drawStrips.push({ f0: f0, f1: f1 });
         }
 
-        DATA.candidates.forEach(function (c) {
-          var stripping = state.strip !== "off" && c.hasDeep;
-          if (c.edge) {
-            // leading/trailing silence: cut its phrase-side edge, or strip the zone
-            if (stripping) pushStrip(c);
-            else pushSplit(c);
-            return;
+        // CONTENT strip: cut at the quiet silence boundaries, strip the SOUND between them
+        if (stripping && state.thresh === "content") {
+          var sorted = eligible.filter(function (c) { return c.quiet.hasDeep; })
+            .sort(function (a, b) { return a.quiet.cutBeat - b.quiet.cutBeat; });
+          var pb = DATA.winStartBeat, pf = 0;
+          sorted.forEach(function (c) {
+            if (c.quiet.cutFrac - pf > EPS) {
+              cutBeats.push(pb, c.quiet.cutBeat); strips.push({ start: pb, end: c.quiet.cutBeat });
+              drawCuts.push(pf, c.quiet.cutFrac); drawStrips.push({ f0: pf, f1: c.quiet.cutFrac });
+            }
+            pb = c.quiet.deepEndBeat; pf = c.quiet.deepEndFrac;
+          });
+          if (1 - pf > EPS) {
+            cutBeats.push(pb, DATA.winEndBeat); strips.push({ start: pb, end: DATA.winEndBeat });
+            drawCuts.push(pf, 1); drawStrips.push({ f0: pf, f1: 1 });
           }
-          var cut = c.durSec >= thresh;
-          if (state.mode === "MACRO") cut = cut && c.hasDeep; // MACRO only cuts real silence
-          if (!cut) return;
-          if (stripping) pushStrip(c);
-          else pushSplit(c);
-        });
+        } else {
+          // split (phrase edges) or silence/quiet strip
+          var atEnd = state.cutAt !== "start";
+          var atStart = state.cutAt !== "end";
+          eligible.forEach(function (c) {
+            var ext = state.thresh === "silence" ? c.silence : c.quiet;
+            if (stripping && ext.hasDeep) {
+              pushZone(c, ext);
+            } else if (!stripping) {
+              if (!ext.hasDeep) { cutBeats.push(ext.cutBeat); drawCuts.push(ext.cutFrac); }
+              else {
+                if (atEnd && ext.cutFrac > EPS) { cutBeats.push(ext.cutBeat); drawCuts.push(ext.cutFrac); }
+                if (atStart && ext.deepEndFrac < 1 - EPS) { cutBeats.push(ext.deepEndBeat); drawCuts.push(ext.deepEndFrac); }
+              }
+            }
+          });
+        }
         current = { cutBeats: cutBeats, strips: strips };
         draw(drawCuts, drawStrips);
         var pieces = cutBeats.length + 1;
@@ -262,23 +287,39 @@
             sensMacro: state.sensMacro,
             sensMicro: state.sensMicro,
             strip: state.strip,
+            thresh: state.thresh,
             silence: state.silence,
           },
         });
       }
 
+      function fill(input) { input.style.setProperty("--fill", input.value * 100 + "%"); }
+
+      function wireSlider(id, get, set) {
+        var input = el(id);
+        input.value = get();
+        fill(input);
+        input.addEventListener("input", function () { set(parseFloat(this.value)); fill(this); selectCuts(); });
+        input.addEventListener("dblclick", function () { this.value = 0.5; set(0.5); fill(this); selectCuts(); }); // reset to mid
+        return input;
+      }
+
+      function toggleStripRows() {
+        var off = state.strip === "off";
+        el("thresh-row").classList.toggle("hide", off);
+        el("silence-row").classList.toggle("hide", off);
+      }
+
       window.onload = function () {
         el("subtitle").textContent = DATA.meta.subtitle || "";
-        el("sens").value = sens();
-        el("silence").value = state.silence;
-        el("sens").addEventListener("input", function () { setSens(parseFloat(this.value)); selectCuts(); });
-        el("silence").addEventListener("input", function () { state.silence = parseFloat(this.value); selectCuts(); });
-        bindSeg("mode", "mode", function () { el("sens").value = sens(); }); // swap slider to the mode's value
+        var sensEl = wireSlider("sens", sens, setSens);
+        wireSlider("silence", function () { return state.silence; }, function (v) { state.silence = v; });
+
+        bindSeg("mode", "mode", function () { sensEl.value = sens(); fill(sensEl); }); // swap slider to the mode's value
         bindSeg("cutat", "cutAt");
-        bindSeg("strip", "strip", function () {
-          el("silence-row").classList.toggle("hide", state.strip === "off");
-        });
-        el("silence-row").classList.toggle("hide", state.strip === "off");
+        bindSeg("thresh", "thresh");
+        bindSeg("strip", "strip", toggleStripRows);
+        toggleStripRows();
         selectCuts();
       };
     </script>

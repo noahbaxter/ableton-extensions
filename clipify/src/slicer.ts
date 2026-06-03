@@ -93,6 +93,8 @@ export async function runSliceStrip(context: Ctx, target: Target): Promise<void>
 
   const data = {
     meta: { subtitle: `${clip.name}  ${debug.fmt(winStartBeat, 1)}–${debug.fmt(winEndBeat, 1)}` },
+    winStartBeat,
+    winEndBeat,
     envelope: prep.envelope,
     // RMS noise floor scaled toward full-scale for a rough canvas reference line
     noiseFloorLevel: Math.min(1, prep.noiseFloor * 4),
@@ -104,7 +106,7 @@ export async function runSliceStrip(context: Ctx, target: Target): Promise<void>
 
   let resultStr: string;
   try {
-    resultStr = await context.ui.showModalDialog(`data:text/html,${encodeURIComponent(html)}`, 560, 470);
+    resultStr = await context.ui.showModalDialog(`data:text/html,${encodeURIComponent(html)}`, 560, 500);
   } catch {
     return; // dialog dismissed
   }
@@ -131,7 +133,7 @@ export async function runHeadless(context: Ctx, target: Target, portions: Portio
   const settings = await loadSettings(context.environment.storageDirectory);
   const prep = await prepare(context, target, false);
 
-  const sel = computeSelection(prep.candidates, settings, portions);
+  const sel = computeSelection(prep.candidates, settings, portions, target.winStartBeat, target.winEndBeat);
   if (!sel.cutBeats.length) {
     console.log(`[clipify] "${clip.name}": nothing to do.`);
     return;

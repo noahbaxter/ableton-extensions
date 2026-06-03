@@ -41,12 +41,14 @@ export function snapToZeroCrossing(
       quietest = i;
     }
     if (i > lo && ((prev <= 0 && v > 0) || (prev >= 0 && v < 0))) {
-      // crossing between i-1 and i; snap to the sample nearer zero
-      const idx = Math.abs(prev) <= a ? i - 1 : i;
-      const dist = Math.abs(idx - target);
+      // the line between samples i-1 and i hits zero at this fractional index —
+      // a cut time is continuous, so we don't need to land on an actual sample
+      const denom = Math.abs(prev) + a;
+      const cross = denom > 0 ? i - 1 + Math.abs(prev) / denom : i - 1;
+      const dist = Math.abs(cross - target);
       if (dist < bestCrossDist) {
         bestCrossDist = dist;
-        bestCross = idx;
+        bestCross = cross;
       }
     }
     prev = v;
