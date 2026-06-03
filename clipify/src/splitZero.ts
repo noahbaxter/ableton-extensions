@@ -3,18 +3,13 @@
 
 import { initialize, AudioClip, AudioTrack } from "@ableton-extensions/sdk";
 
-import * as fs from "node:fs/promises";
-
-import { buildClipMapping } from "./mapping.js";
+import { renderWindow } from "./render.js";
 import { snapToZeroCrossing } from "./zeroCross.js";
 import { debug } from "./debug.js";
 
 type Ctx = ReturnType<typeof initialize>;
 
-async function decode(filePath: string) {
-  const { default: decodeAudio } = await import("audio-decode");
-  return decodeAudio(await fs.readFile(filePath));
-}
+const MARGIN_SEC = 0.05; // render this much each side of the cursor — room for the ±5ms snap
 
 export async function splitAtZeroCrossing(
   context: Ctx,
@@ -22,19 +17,20 @@ export async function splitAtZeroCrossing(
   track: AudioTrack<"1.0.0">,
   splitBeat: number,
 ): Promise<void> {
-  const decoded = await decode(clip.filePath);
-  const channels = Array.from({ length: decoded.numberOfChannels }, (_, i) =>
-    decoded.getChannelData(i),
-  );
+  const beatPerSec = context.application.song.tempo / 60;
+  const marginBeats = MARGIN_SEC * beatPerSec;
+  const renderStart = Math.max(clip.startTime, splitBeat - marginBeats);
+  const renderEnd = Math.min(clip.endTime, splitBeat + marginBeats);
 
-  const { secToArrBeat, beatToClipSec } = buildClipMapping(clip, context.application.song.tempo);
-  const splitSec = beatToClipSec(splitBeat);
-  const snappedSec = snapToZeroCrossing(channels, decoded.sampleRate, splitSec);
-  const snappedBeat = secToArrBeat(snappedSec);
+  const { channels, sampleRate } = await renderWindow(context, track, renderStart, renderEnd);
+
+  const cursorSec = (splitBeat - renderStart) / beatPerSec; // cursor's offset into the render
+  const snappedSec = snapToZeroCrossing(channels, sampleRate, cursorSec);
+  const snappedBeat = renderStart + snappedSec * beatPerSec;
 
   debug.log(
     `split-zero "${clip.name}" beat ${debug.fmt(splitBeat)} -> ${debug.fmt(snappedBeat)} ` +
-      `(sec ${debug.fmt(splitSec)} -> ${debug.fmt(snappedSec)})`,
+      `(local sec ${debug.fmt(cursorSec)} -> ${debug.fmt(snappedSec)})`,
   );
 
   await context.withinTransaction(() => track.clearClipsInRange(snappedBeat, snappedBeat));

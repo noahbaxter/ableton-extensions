@@ -10,12 +10,10 @@
 
 import { initialize, AudioClip, AudioTrack } from "@ableton-extensions/sdk";
 
-import * as fs from "node:fs/promises";
-
 import { detectSoundSegments, smoothedRms, floorFromRms } from "./silence.js";
 import { buildCandidates, type Candidate } from "./candidates.js";
 import { buildEnvelope } from "./envelope.js";
-import { buildClipMapping } from "./mapping.js";
+import { renderWindow } from "./render.js";
 import { loadSettings, saveSettings, type Settings } from "./settings.js";
 import { computeSelection, type Portions } from "./select.js";
 import { debug } from "./debug.js";
@@ -37,12 +35,6 @@ interface ApplyResult {
   settings?: Settings;
 }
 
-// lazy import so a heavy/failing decoder can't block activation
-async function decode(filePath: string) {
-  const { default: decodeAudio } = await import("audio-decode");
-  return decodeAudio(await fs.readFile(filePath));
-}
-
 interface ClipPrep {
   target: Target;
   candidates: Candidate[];
@@ -51,7 +43,9 @@ interface ClipPrep {
   hasContent: boolean; // false when the whole window is below threshold
 }
 
-// Decode every target and build its cut candidates. When avgAcrossClips is set and
+// Render every target's window and build its cut candidates. The render is in
+// arrangement time, so it IS the window — local second 0 maps to winStartBeat and
+// the beat conversion is a linear tempo rate. When avgAcrossClips is set and
 // there's more than one clip, all clips share one noise floor pooled from their RMS,
 // so a quiet clip is judged against the same bar as a loud one (and gets stripped
 // whole if it never rises above it).
@@ -61,32 +55,34 @@ async function prepareAll(
   withEnvelope: boolean,
   avgAcrossClips: boolean,
 ): Promise<ClipPrep[]> {
-  const tempo = context.application.song.tempo;
-  const decoded = [];
+  const beatPerSec = context.application.song.tempo / 60;
+  const rendered = [];
   for (const target of targets) {
-    const dec = await decode(target.clip.filePath);
-    const channels = Array.from({ length: dec.numberOfChannels }, (_, i) => dec.getChannelData(i));
-    const { secToArrBeat, beatToClipSec } = buildClipMapping(target.clip, tempo);
-    decoded.push({
+    const { channels, sampleRate, durSec } = await renderWindow(
+      context,
+      target.track,
+      target.winStartBeat,
+      target.winEndBeat,
+    );
+    rendered.push({
       target,
       channels,
-      sampleRate: dec.sampleRate,
-      secToArrBeat,
-      winStartSec: beatToClipSec(target.winStartBeat),
-      winEndSec: beatToClipSec(target.winEndBeat),
+      sampleRate,
+      durSec,
+      secToArrBeat: (s: number) => target.winStartBeat + s * beatPerSec,
     });
   }
 
   let sharedFloor: number | undefined;
-  if (avgAcrossClips && decoded.length > 1) {
-    sharedFloor = floorFromRms(decoded.flatMap((d) => smoothedRms(d.channels)));
+  if (avgAcrossClips && rendered.length > 1) {
+    sharedFloor = floorFromRms(rendered.flatMap((d) => smoothedRms(d.channels)));
   }
 
-  return decoded.map((d) => {
+  return rendered.map((d) => {
     const detection = detectSoundSegments(d.channels, d.sampleRate, undefined, sharedFloor);
     const candidates = buildCandidates(detection, {
-      startSec: d.winStartSec,
-      endSec: d.winEndSec,
+      startSec: 0,
+      endSec: d.durSec,
       secToArrBeat: d.secToArrBeat,
       channels: d.channels,
       sampleRate: d.sampleRate,
@@ -98,9 +94,7 @@ async function prepareAll(
     return {
       target: d.target,
       candidates,
-      envelope: withEnvelope
-        ? buildEnvelope(d.channels, d.sampleRate, d.winStartSec, d.winEndSec)
-        : [],
+      envelope: withEnvelope ? buildEnvelope(d.channels, d.sampleRate, 0, d.durSec) : [],
       noiseFloor: detection.noiseFloor,
       hasContent: detection.segments.length > 0,
     };
