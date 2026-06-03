@@ -1,10 +1,25 @@
 // Gap detection: find the quiet sections (breaths / spaces between words & phrases)
 // and return the SOUND segments in between. Pure DSP, no SDK — operates on decoded
 // PCM so it's easy to reason about and swap the metric later.
+//
+// Detection runs at the FINEST grain (catch every word-level segment). Choosing
+// which gaps actually become cuts is a separate, grain-controlled step in plan.ts.
 
 export interface DetectParams {
-  /** RMS below this (linear, 0..1) counts as "quiet". Higher = more counts as a gap. */
-  rmsThreshold: number;
+  /** Which RMS percentile (0..1) is treated as the recording's noise floor. */
+  noiseFloorPercentile: number;
+  /** How far above the noise floor (dB) still counts as "quiet". Higher = more
+   *  gets treated as a gap, so messier audio still yields cuts. */
+  thresholdMarginDb: number;
+  /** Hard lower bound (linear RMS) for the threshold. On clean audio the noise
+   *  floor is near-zero, so the adaptive term would treat room tone / tails as
+   *  sound and over-segment; this floor keeps clean material sane. The adaptive
+   *  term only takes over when the actual noise floor is higher (noisy audio). */
+  absoluteFloor: number;
+  /** Median-filter width (in windows, odd) applied to the RMS envelope. Removes
+   *  lone loud spikes that would otherwise split a real gap into sub-threshold
+   *  runs and make it disappear. */
+  smoothingWindows: number;
   /** A quiet stretch must last at least this long (seconds) to be treated as a cut. */
   minSilenceDuration: number;
   /** Drop sound segments shorter than this (seconds) — kills tiny fragments. */
@@ -22,22 +37,19 @@ export interface Segment {
 }
 
 /**
- * "Confidence" / sensitivity knob in [0,1].
- *   0  -> only cuts at long, very quiet gaps (few slices)
- *   1  -> cuts at short, subtler gaps (many slices)
- * Everything else is derived from this single number.
+ * Fixed, fine detection settings. Sensitivity no longer lives here — every slice
+ * detects the same word-level segments; plan.ts decides how many survive as cuts.
  */
-export function paramsForSensitivity(s: number): DetectParams {
-  const t = Math.min(1, Math.max(0, s));
-  const lerp = (a: number, b: number) => a + (b - a) * t;
-  return {
-    rmsThreshold: lerp(0.004, 0.045), // ~ -48 dBFS .. -27 dBFS
-    minSilenceDuration: lerp(0.35, 0.07),
-    minSegmentDuration: lerp(0.3, 0.05),
-    padding: 0.02,
-    windowSize: 1024,
-  };
-}
+export const DETECT_PARAMS: DetectParams = {
+  noiseFloorPercentile: 0.1,
+  thresholdMarginDb: 9, // ~2.8x the noise floor
+  absoluteFloor: 0.025, // ~ -32 dBFS
+  smoothingWindows: 3,
+  minSilenceDuration: 0.045,
+  minSegmentDuration: 0.03,
+  padding: 0.015,
+  windowSize: 1024,
+};
 
 /** Per-window RMS across all channels. */
 function windowRms(channels: Float32Array[], windowSize: number): number[] {
@@ -59,23 +71,60 @@ function windowRms(channels: Float32Array[], windowSize: number): number[] {
   return out;
 }
 
+/** Value at percentile p (0..1) of a list, via nearest-rank on a sorted copy. */
+function percentile(values: number[], p: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))));
+  return sorted[idx]!;
+}
+
+/** Sliding median over `width` windows (odd); width <= 1 is a no-op. */
+function medianFilter(values: number[], width: number): number[] {
+  if (width <= 1) return values;
+  const h = Math.floor(width / 2);
+  return values.map((_, i) => {
+    const win = values.slice(Math.max(0, i - h), Math.min(values.length, i + h + 1));
+    win.sort((a, b) => a - b);
+    return win[Math.floor(win.length / 2)]!;
+  });
+}
+
+/** Result of detection, plus the levels used (for evaluation/logging). */
+export interface Detection {
+  segments: Segment[]; // sound regions to keep, in seconds
+  noiseFloor: number; // measured floor (linear RMS)
+  threshold: number; // the "quiet" cutoff actually used (linear RMS)
+}
+
 /**
- * Returns the SOUND segments (the parts to keep as individual clips), in seconds.
- * Found by locating qualifying silence gaps and taking the audio between them.
+ * Returns the SOUND segments (the parts to keep as individual clips), in seconds,
+ * plus the detection levels used. Found by locating qualifying silence gaps and
+ * taking the audio between them. The "quiet" threshold is adaptive — a margin
+ * above the measured noise floor, bounded below by an absolute floor — so gaps
+ * are caught on clean and noisy recordings alike without over-segmenting.
  */
 export function detectSoundSegments(
   channels: Float32Array[],
   sampleRate: number,
-  p: DetectParams,
-): Segment[] {
-  if (!channels.length || !channels[0]?.length) return [];
+  p: DetectParams = DETECT_PARAMS,
+): Detection {
+  if (!channels.length || !channels[0]?.length) {
+    return { segments: [], noiseFloor: 0, threshold: 0 };
+  }
 
   const totalDur = channels[0].length / sampleRate;
   const windowDur = p.windowSize / sampleRate;
   const minSilenceWindows = Math.ceil(p.minSilenceDuration / windowDur);
 
-  const rms = windowRms(channels, p.windowSize);
-  const quiet = rms.map((v) => v < p.rmsThreshold);
+  const rms = medianFilter(windowRms(channels, p.windowSize), p.smoothingWindows);
+
+  // Adaptive threshold: sit `thresholdMarginDb` above the noise floor, so "quiet"
+  // means quiet relative to THIS recording — but never below `absoluteFloor`, so
+  // a pristine clip (floor ~0) doesn't treat room tone as sound.
+  const noiseFloor = percentile(rms, p.noiseFloorPercentile);
+  const threshold = Math.max(noiseFloor * Math.pow(10, p.thresholdMarginDb / 20), p.absoluteFloor);
+  const quiet = rms.map((v) => v < threshold);
 
   // Collect qualifying silence gaps (runs of quiet windows that are long enough).
   const gaps: Segment[] = [];
@@ -115,5 +164,5 @@ export function detectSoundSegments(
     if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
     else merged.push({ ...s });
   }
-  return merged;
+  return { segments: merged, noiseFloor, threshold };
 }
