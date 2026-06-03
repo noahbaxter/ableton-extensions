@@ -6,12 +6,15 @@
 - Ripple-delete stripped silence — blocked: no clip-move API (would need to recreate clips)
 - Name the undo entry (shows "Custom Action") — blocked: withinTransaction takes no label
 - Fades into stripped silence — blocked: SDK 1.0.0 has no fade API
-- Multi-clip time selections — only handles the clip under the selection start
+- Average-across-clips toggle in the popup — needs a re-detect round-trip to preview live (forced on for now)
 - Nest context-menu items under a submenu — blocked: SDK menus are flat
 - More clip tools — normalize, trim-to-content, dedupe takes, batch rename/recolor
 
 ## Done
 
+- Multi-clip time selections — every overlapped clip processed, previewed in a row
+- Shared noise floor across clips; remove clips that never rise above threshold
+- Per-section enable squares; Silence/Quiet/Content strip targets
 - Slice & Strip popup — waveform preview, MACRO/MICRO modes, sensitivity slider
 - Per-mode sensitivity — MACRO and MICRO each remember their own setting
 - Strip silence — isolate noise-floor zones and deactivate or delete them

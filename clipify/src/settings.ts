@@ -1,27 +1,36 @@
-// Persist the popup's last-used controls across runs, in the extension's storage
-// directory. Missing/unreadable file → built-in defaults; saving never throws.
+// Persist the popup's controls across runs, in the extension's storage directory.
+// Missing/unreadable file → built-in defaults; saving never throws.
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 export interface Settings {
+  // splits
+  splitOn: boolean; // SPLITS section enabled
   mode: "MACRO" | "MICRO";
-  cutAt: "start" | "end" | "both"; // which phrase edges to cut (split mode)
+  cutAt: "start" | "end" | "both"; // which phrase edges to cut
   sensMacro: number; // 0..1, MACRO's own sensitivity
   sensMicro: number; // 0..1, MICRO's own sensitivity
-  strip: "off" | "deactivate" | "delete";
+  // strip
+  stripOn: boolean; // STRIP section enabled
+  stripAction: "deactivate" | "delete";
   thresh: "silence" | "quiet" | "content"; // what the strip targets
   silence: number; // 0..1, strip-zone extent
+  // advanced
+  avgAcrossClips: boolean; // share one noise floor across all selected clips
 }
 
 const DEFAULTS: Settings = {
+  splitOn: true,
   mode: "MACRO",
   cutAt: "both",
   sensMacro: 0.5,
   sensMicro: 0.7,
-  strip: "off",
+  stripOn: false,
+  stripAction: "deactivate",
   thresh: "quiet",
   silence: 0.5,
+  avgAcrossClips: true,
 };
 
 const FILE = "clipify-settings.json";

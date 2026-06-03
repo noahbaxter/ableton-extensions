@@ -1,17 +1,18 @@
-// Slice & Strip: open the popup over a clip (or a time selection within one),
-// then apply the cuts and strip the silence the user chose.
+// Slice & Strip: decode every clip the time selection overlaps, preview them in the
+// popup, then apply the chosen splits/strips to each.
 //
-// Heavy DSP runs once here (decode → detect → candidates → envelope); the popup
-// does the interactive mode/sensitivity/strip selection (showModalDialog is
-// one-shot, no round-trips); then we apply: zero-width splits at each cut beat,
-// and for each strip region either mute the isolated silence clip or clear it.
-// Cut positions are snapped to zero crossings in candidates.ts so splits are clean.
+// Heavy DSP runs here (decode → detect → candidates → envelope), optionally sharing
+// one noise floor across clips; the popup does the interactive selection
+// (showModalDialog is one-shot, no round-trips); then we apply per clip: zero-width
+// splits at each cut beat, and for each strip region mute/clear the isolated clip
+// (or the whole clip when it never rises above threshold). Cuts snap to zero
+// crossings in candidates.ts so splits are clean.
 
 import { initialize, AudioClip, AudioTrack } from "@ableton-extensions/sdk";
 
 import * as fs from "node:fs/promises";
 
-import { detectSoundSegments } from "./silence.js";
+import { detectSoundSegments, smoothedRms, floorFromRms } from "./silence.js";
 import { buildCandidates, type Candidate } from "./candidates.js";
 import { buildEnvelope } from "./envelope.js";
 import { buildClipMapping } from "./mapping.js";
@@ -33,9 +34,6 @@ export interface Target {
 
 interface ApplyResult {
   action: string;
-  cutBeats?: number[];
-  strips?: { start: number; end: number }[];
-  stripAction?: "off" | "deactivate" | "delete";
   settings?: Settings;
 }
 
@@ -45,60 +43,89 @@ async function decode(filePath: string) {
   return decodeAudio(await fs.readFile(filePath));
 }
 
-interface Prepared {
+interface ClipPrep {
+  target: Target;
   candidates: Candidate[];
   envelope: number[]; // empty unless requested
   noiseFloor: number;
+  hasContent: boolean; // false when the whole window is below threshold
 }
 
-// Decode the clip and build the cut candidates over the operating window. Shared
-// by the interactive popup and the headless commands (envelope is popup-only).
-async function prepare(context: Ctx, target: Target, withEnvelope: boolean): Promise<Prepared> {
-  const { clip, winStartBeat, winEndBeat } = target;
+// Decode every target and build its cut candidates. When avgAcrossClips is set and
+// there's more than one clip, all clips share one noise floor pooled from their RMS,
+// so a quiet clip is judged against the same bar as a loud one (and gets stripped
+// whole if it never rises above it).
+async function prepareAll(
+  context: Ctx,
+  targets: Target[],
+  withEnvelope: boolean,
+  avgAcrossClips: boolean,
+): Promise<ClipPrep[]> {
+  const tempo = context.application.song.tempo;
+  const decoded = [];
+  for (const target of targets) {
+    const dec = await decode(target.clip.filePath);
+    const channels = Array.from({ length: dec.numberOfChannels }, (_, i) => dec.getChannelData(i));
+    const { secToArrBeat, beatToClipSec } = buildClipMapping(target.clip, tempo);
+    decoded.push({
+      target,
+      channels,
+      sampleRate: dec.sampleRate,
+      secToArrBeat,
+      winStartSec: beatToClipSec(target.winStartBeat),
+      winEndSec: beatToClipSec(target.winEndBeat),
+    });
+  }
 
-  const decoded = await decode(clip.filePath);
-  const channels = Array.from({ length: decoded.numberOfChannels }, (_, i) =>
-    decoded.getChannelData(i),
-  );
+  let sharedFloor: number | undefined;
+  if (avgAcrossClips && decoded.length > 1) {
+    sharedFloor = floorFromRms(decoded.flatMap((d) => smoothedRms(d.channels)));
+  }
 
-  const { secToArrBeat, beatToClipSec } = buildClipMapping(clip, context.application.song.tempo);
-  const winStartSec = beatToClipSec(winStartBeat);
-  const winEndSec = beatToClipSec(winEndBeat);
-
-  const detection = detectSoundSegments(channels, decoded.sampleRate);
-  const candidates = buildCandidates(detection, {
-    startSec: winStartSec,
-    endSec: winEndSec,
-    secToArrBeat,
-    channels,
-    sampleRate: decoded.sampleRate,
+  return decoded.map((d) => {
+    const detection = detectSoundSegments(d.channels, d.sampleRate, undefined, sharedFloor);
+    const candidates = buildCandidates(detection, {
+      startSec: d.winStartSec,
+      endSec: d.winEndSec,
+      secToArrBeat: d.secToArrBeat,
+      channels: d.channels,
+      sampleRate: d.sampleRate,
+    });
+    debug.log(
+      `prepare "${d.target.clip.name}"  floor ${debug.db(detection.noiseFloor)}dB  ` +
+        `${detection.segments.length} segments  ${candidates.length} gaps`,
+    );
+    return {
+      target: d.target,
+      candidates,
+      envelope: withEnvelope
+        ? buildEnvelope(d.channels, d.sampleRate, d.winStartSec, d.winEndSec)
+        : [],
+      noiseFloor: detection.noiseFloor,
+      hasContent: detection.segments.length > 0,
+    };
   });
-  const envelope = withEnvelope
-    ? buildEnvelope(channels, decoded.sampleRate, winStartSec, winEndSec)
-    : [];
-
-  debug.log(
-    `prepare "${clip.name}" warping=${clip.warping}  ` +
-      `win-beat ${debug.fmt(winStartBeat)}..${debug.fmt(winEndBeat)}  ` +
-      `floor ${debug.db(detection.noiseFloor)}dB  ${candidates.length} candidate gaps`,
-  );
-
-  return { candidates, envelope, noiseFloor: detection.noiseFloor };
 }
 
-export async function runSliceStrip(context: Ctx, target: Target): Promise<void> {
-  const { clip, track, winStartBeat, winEndBeat } = target;
-  const prep = await prepare(context, target, true);
+export async function runSliceStrip(context: Ctx, targets: Target[]): Promise<void> {
   const settings = await loadSettings(context.environment.storageDirectory);
+  const preps = await prepareAll(context, targets, true, settings.avgAcrossClips);
 
+  const spanStartBeat = Math.min(...targets.map((t) => t.winStartBeat));
+  const spanEndBeat = Math.max(...targets.map((t) => t.winEndBeat));
   const data = {
-    meta: { subtitle: `${clip.name}  ${debug.fmt(winStartBeat, 1)}–${debug.fmt(winEndBeat, 1)}` },
-    winStartBeat,
-    winEndBeat,
-    envelope: prep.envelope,
-    // RMS noise floor scaled toward full-scale for a rough canvas reference line
-    noiseFloorLevel: Math.min(1, prep.noiseFloor * 4),
-    candidates: prep.candidates,
+    clips: preps.map((p) => ({
+      name: p.target.clip.name,
+      winStartBeat: p.target.winStartBeat,
+      winEndBeat: p.target.winEndBeat,
+      envelope: p.envelope,
+      // RMS noise floor scaled toward full-scale for a rough canvas reference line
+      noiseFloorLevel: Math.min(1, p.noiseFloor * 4),
+      candidates: p.candidates,
+      hasContent: p.hasContent,
+    })),
+    spanStartBeat,
+    spanEndBeat,
     defaults: settings,
   };
   const json = JSON.stringify(data).replace(/</g, "\\u003c");
@@ -106,7 +133,7 @@ export async function runSliceStrip(context: Ctx, target: Target): Promise<void>
 
   let resultStr: string;
   try {
-    resultStr = await context.ui.showModalDialog(`data:text/html,${encodeURIComponent(html)}`, 560, 500);
+    resultStr = await context.ui.showModalDialog(`data:text/html,${encodeURIComponent(html)}`, 520, 450);
   } catch {
     return; // dialog dismissed
   }
@@ -118,39 +145,21 @@ export async function runSliceStrip(context: Ctx, target: Target): Promise<void>
     return;
   }
   if (result.settings) void saveSettings(context.environment.storageDirectory, result.settings);
+  if (result.action !== "apply") return;
 
-  if (result.action !== "apply" || !result.cutBeats?.length) {
-    console.log(`[clipify] "${clip.name}": nothing to slice.`);
-    return;
-  }
-
-  await applyCuts(context, track, result);
+  const s = result.settings ?? settings;
+  await applyMany(context, preps, s, { split: s.splitOn, strip: s.stripOn });
 }
 
 // Headless command: run the chosen portions with the last-saved settings, no popup.
-export async function runHeadless(context: Ctx, target: Target, portions: Portions): Promise<void> {
-  const { clip, track } = target;
+export async function runHeadless(
+  context: Ctx,
+  targets: Target[],
+  portions: Portions,
+): Promise<void> {
   const settings = await loadSettings(context.environment.storageDirectory);
-  const prep = await prepare(context, target, false);
-
-  const sel = computeSelection(prep.candidates, settings, portions, target.winStartBeat, target.winEndBeat);
-  if (!sel.cutBeats.length) {
-    console.log(`[clipify] "${clip.name}": nothing to do.`);
-    return;
-  }
-  // a strip needs an action; if the saved one is "off", fall back to a safe deactivate
-  const stripAction = portions.strip
-    ? settings.strip === "off"
-      ? "deactivate"
-      : settings.strip
-    : "off";
-
-  await applyCuts(context, track, {
-    action: "apply",
-    cutBeats: sel.cutBeats,
-    strips: sel.strips,
-    stripAction,
-  });
+  const preps = await prepareAll(context, targets, false, settings.avgAcrossClips);
+  await applyMany(context, preps, settings, portions);
 }
 
 function dedupe(beats: number[]): number[] {
@@ -158,70 +167,117 @@ function dedupe(beats: number[]): number[] {
   return sorted.filter((b, i) => i === 0 || b - sorted[i - 1]! > DEDUPE_BEATS);
 }
 
-async function applyCuts(
-  context: Ctx,
-  track: AudioTrack<"1.0.0">,
-  result: ApplyResult,
-): Promise<void> {
-  const cuts = dedupe(result.cutBeats ?? []);
-  const strips = result.strips ?? [];
-  const action = result.stripAction ?? "off";
+interface Job {
+  track: AudioTrack<"1.0.0">;
+  cuts: number[];
+  strips: { start: number; end: number }[];
+  deleteWhole?: AudioClip<"1.0.0">; // clip is fully below threshold — strip it entirely
+}
 
+// Turn each prepared clip into a selection, then apply them all under one dialog.
+async function applyMany(
+  context: Ctx,
+  preps: ClipPrep[],
+  settings: Settings,
+  portions: Portions,
+): Promise<void> {
+  const action: "off" | "deactivate" | "delete" = portions.strip ? settings.stripAction : "off";
+
+  const jobs: Job[] = [];
+  for (const p of preps) {
+    if (portions.strip && !p.hasContent) {
+      // whole window is silence/quiet — remove the clip outright
+      jobs.push({ track: p.target.track, cuts: [], strips: [], deleteWhole: p.target.clip });
+      continue;
+    }
+    const sel = computeSelection(
+      p.candidates,
+      settings,
+      portions,
+      p.target.winStartBeat,
+      p.target.winEndBeat,
+    );
+    if (sel.cutBeats.length) {
+      jobs.push({ track: p.target.track, cuts: dedupe(sel.cutBeats), strips: sel.strips });
+    }
+  }
+  if (!jobs.length) {
+    console.log("[clipify] nothing to do.");
+    return;
+  }
+
+  const totalCuts = jobs.reduce((n, j) => n + j.cuts.length, 0);
+  const totalStrips = jobs.reduce((n, j) => n + j.strips.length + (j.deleteWhole ? 1 : 0), 0);
   console.log(
-    `[clipify] Slicing into ${cuts.length + 1} clips` +
-      (strips.length && action !== "off" ? `, ${action} ${strips.length} silence region(s).` : "."),
+    `[clipify] ${jobs.length} clip(s): ${totalCuts} cuts` +
+      (action !== "off" && totalStrips ? `, ${action} ${totalStrips} region(s).` : "."),
   );
+
+  await context.ui.withinProgressDialog("Clipify…", {}, async (update) => {
+    for (let i = 0; i < jobs.length; i++) {
+      await update(`Clip ${i + 1} of ${jobs.length}…`, Math.round((i / jobs.length) * 100));
+      await applyJob(context, jobs[i]!, action);
+    }
+  });
+}
+
+// Apply one clip's cuts/strips. Splits are one undo step; the strip a second (it
+// needs the post-split clips, so it can't share the transaction).
+async function applyJob(context: Ctx, job: Job, action: "off" | "deactivate" | "delete"): Promise<void> {
+  const { track, cuts, strips } = job;
+
+  // whole-clip strip (clip never rises above threshold)
+  if (job.deleteWhole) {
+    if (action === "delete") {
+      await context
+        .withinTransaction(() => track.deleteClip(job.deleteWhole!))
+        .catch((e: unknown) => console.error("[clipify] delete whole clip failed:", e));
+    } else {
+      context.withinTransaction(() => (job.deleteWhole!.muted = true));
+    }
+    return;
+  }
 
   const stripping = strips.length > 0 && action !== "off";
 
-  await context.ui.withinProgressDialog("Clipify…", {}, async (update) => {
-    await update(`Splitting at ${cuts.length} points…`, 40);
-    // withinTransaction is synchronous (no awaiting inside), so to group ops into one
-    // undo step we initiate them all and return Promise.all. Splits are one step;
-    // the strip is a second step (it needs the post-split clips, so it can't share
-    // the transaction — collapsing only works without an await between them).
+  await context.withinTransaction(() =>
+    Promise.all(
+      cuts.map((b) =>
+        track.clearClipsInRange(b, b).catch((e: unknown) => {
+          console.error(`[clipify] split @ ${debug.fmt(b)} failed:`, e);
+          return null;
+        }),
+      ),
+    ),
+  );
+
+  if (!stripping) return;
+
+  // the silence clips now exist; resolve them by start beat
+  const clips = strips
+    .map((r) => {
+      const c = findClipAt(track, r.start);
+      if (!c) console.error(`[clipify] no clip to strip @ ${debug.fmt(r.start)}`);
+      return c;
+    })
+    .filter((c): c is NonNullable<typeof c> => c !== null);
+
+  if (action === "delete") {
     await context.withinTransaction(() =>
       Promise.all(
-        cuts.map((b) =>
-          track.clearClipsInRange(b, b).catch((e: unknown) => {
-            console.error(`[clipify] split @ ${debug.fmt(b)} failed:`, e);
+        clips.map((c) =>
+          track.deleteClip(c).catch((e: unknown) => {
+            console.error("[clipify] delete failed:", e);
             return null;
           }),
         ),
       ),
     );
-
-    if (!stripping) return;
-
-    await update(`${action === "delete" ? "Deleting" : "Deactivating"} ${strips.length} silence region(s)…`, 80);
-    // the silence clips now exist; resolve them by start beat
-    const clips = strips
-      .map((r) => {
-        const c = findClipAt(track, r.start);
-        if (!c) console.error(`[clipify] no clip to strip @ ${debug.fmt(r.start)}`);
-        return c;
-      })
-      .filter((c): c is NonNullable<typeof c> => c !== null);
-
-    if (action === "delete") {
-      // all deletes in one transaction → one undo step
-      await context.withinTransaction(() =>
-        Promise.all(
-          clips.map((c) =>
-            track.deleteClip(c).catch((e: unknown) => {
-              console.error("[clipify] delete failed:", e);
-              return null;
-            }),
-          ),
-        ),
-      );
-    } else {
-      // mutes are synchronous → one transaction, one undo step
-      context.withinTransaction(() => {
-        for (const c of clips) c.muted = true;
-      });
-    }
-  });
+  } else {
+    context.withinTransaction(() => {
+      for (const c of clips) c.muted = true;
+    });
+  }
 }
 
 function findClipAt(track: AudioTrack<"1.0.0">, beat: number) {

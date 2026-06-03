@@ -16,9 +16,10 @@ type Ctx = ReturnType<typeof initialize>;
 export function activate(activation: ActivationContext) {
   const context = initialize(activation, "1.0.0");
 
-  // Interactive Slice & Strip popup — whole clip, or windowed to a time selection
-  registerClipifyCommand(context, "clipify.sliceStrip", "Clipify…", (target) =>
-    runSliceStrip(context, target),
+  // Interactive Slice & Strip popup — windowed to the time selection, across every
+  // clip it overlaps
+  registerClipifyCommand(context, "clipify.sliceStrip", "Clipify…", (targets) =>
+    runSliceStrip(context, targets),
   );
 
   // Headless commands — apply the portion(s) with the last-saved settings, no popup
@@ -28,7 +29,7 @@ export function activate(activation: ActivationContext) {
     { id: "clipify.quick", label: "Clipify Quick", portions: { split: true, strip: true } },
   ];
   for (const { id, label, portions } of headless) {
-    registerClipifyCommand(context, id, label, (target) => runHeadless(context, target, portions));
+    registerClipifyCommand(context, id, label, (targets) => runHeadless(context, targets, portions));
   }
 
   // Standalone split at nearest zero crossing — cursor only, not a time range
@@ -56,11 +57,11 @@ function registerClipifyCommand(
   context: Ctx,
   id: string,
   label: string,
-  run: (target: Target) => Promise<void>,
+  run: (targets: Target[]) => Promise<void>,
 ): void {
   context.commands.registerCommand(id, (arg: unknown) => {
-    const target = resolveTarget(context, arg);
-    if (target) void run(target).catch((e) => console.error("[clipify]", e));
+    const targets = resolveTargets(context, arg);
+    if (targets.length) void run(targets).catch((e) => console.error("[clipify]", e));
   });
   context.ui.registerContextMenuAction("AudioTrack.ArrangementSelection", label, id);
 }
@@ -93,19 +94,35 @@ function clipUnderCursor(
   return null;
 }
 
-// Clipify needs a real time selection — windowed to its range (selecting the clip
-// head gives the whole clip). A bare cursor (no range) does nothing here; that's
-// what Split at Nearest 0 Crossing is for.
-function resolveTarget(context: Ctx, arg: unknown): Target | null {
+// Clipify needs a real time selection. Every audio clip the selection overlaps
+// becomes a target, each windowed to the intersection — so a selection that starts
+// or ends in empty space, or spans several clips, still works. (Selecting a clip
+// head selects its full range → that one clip.) A bare cursor does nothing here;
+// that's what Split at Nearest 0 Crossing is for.
+function resolveTargets(context: Ctx, arg: unknown): Target[] {
   const sel = asSelection(arg);
-  if (!sel || !(sel.time_selection_end > sel.time_selection_start)) return null;
-  const hit = clipUnderCursor(context, sel);
-  if (!hit) return null;
-  const { clip, track } = hit;
-  return {
-    clip,
-    track,
-    winStartBeat: Math.max(clip.startTime, sel.time_selection_start),
-    winEndBeat: Math.min(clip.endTime, sel.time_selection_end),
-  };
+  if (!sel || !(sel.time_selection_end > sel.time_selection_start)) return [];
+  const start = sel.time_selection_start;
+  const end = sel.time_selection_end;
+
+  const tracks = sel.selected_lanes
+    .map((h) => context.getObjectFromHandle(h, DataModelObject))
+    .filter((o): o is AudioTrack<"1.0.0"> => o instanceof AudioTrack);
+
+  const targets: Target[] = [];
+  for (const track of tracks) {
+    for (const clip of track.arrangementClips) {
+      if (clip instanceof AudioClip && clip.endTime > start && clip.startTime < end) {
+        targets.push({
+          clip,
+          track,
+          winStartBeat: Math.max(clip.startTime, start),
+          winEndBeat: Math.min(clip.endTime, end),
+        });
+      }
+    }
+  }
+  targets.sort((a, b) => a.winStartBeat - b.winStartBeat);
+  if (!targets.length) console.log("[clipify] No audio clip in the time selection.");
+  return targets;
 }

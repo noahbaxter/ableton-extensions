@@ -7,7 +7,7 @@
     <style>
       :root {
         --bg: #2b2b2b;
-        --line: #454545;
+        --line: #444;
         --text: #d8d8d8;
         --dim: #8a8a8a;
         --accent: #f5a623;
@@ -16,42 +16,47 @@
       }
       * { box-sizing: border-box; }
       html, body {
-        margin: 0;
-        height: 100%;
-        background: var(--bg);
-        color: var(--text);
-        font: 12px/1.35 -apple-system, "Segoe UI", system-ui, sans-serif;
+        margin: 0; height: 100%;
+        background: var(--bg); color: var(--text);
+        font: 11px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif;
         user-select: none;
       }
-      .wrap { padding: 12px 14px; display: flex; flex-direction: column; height: 100%; gap: 10px; }
-      h1 { font-size: 14px; font-weight: 600; margin: 0; }
+      .wrap { padding: 10px 12px; display: flex; flex-direction: column; height: 100%; gap: 7px; }
+      h1 { font-size: 13px; font-weight: 600; margin: 0; }
       .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-      .subtitle { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .count { color: var(--accent); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-      canvas { width: 100%; height: 92px; display: block; background: #262626; border-radius: 4px; }
-      .section { color: var(--dim); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 2px; }
-      .ctl { display: flex; align-items: center; gap: 10px; }
-      .ctl > label { color: var(--dim); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; width: 64px; flex: none; }
-      .seg { display: flex; flex: 1; background: #262626; border-radius: 5px; overflow: hidden; }
+      .subtitle { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .count { color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+      canvas { width: 100%; height: 84px; display: block; background: #262626; border-radius: 4px; }
+
+      .section { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
+      .toggle { width: 13px; height: 13px; border-radius: 3px; background: var(--accent); cursor: pointer; flex: none; }
+      .toggle.off { background: #555; }
+      .body { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; padding-top: 6px; }
+      .body.hide { display: none; }
+
+      .row { display: flex; align-items: center; gap: 12px; }
+      .row > label { width: 52px; flex: none; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+      .row > .seg, .row > input { flex: 1; }
+      .seg { display: flex; background: #303030; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
       .seg button {
         flex: 1; appearance: none; border: 0; background: transparent; color: var(--dim);
-        padding: 6px 6px; font: inherit; cursor: pointer; border-right: 1px solid var(--line);
+        padding: 5px 6px; font: inherit; cursor: pointer; border-right: 1px solid var(--line); white-space: nowrap;
       }
       .seg button:last-child { border-right: 0; }
-      .seg button.on { background: #4a4a4a; color: var(--text); }
-      /* custom-painted track so the fill keeps its colour when the window is inactive
-         (accent-color greys out on blur) */
-      input[type=range] { flex: 1; margin: 0; height: 14px; cursor: pointer; -webkit-appearance: none; appearance: none; background: transparent; }
+      .seg button.on { background: #585858; color: #fff; }
+
+      /* custom-painted track so the fill keeps its colour when the window is inactive */
+      input[type=range] { flex: 1; margin: 0; height: 13px; cursor: pointer; -webkit-appearance: none; appearance: none; background: transparent; }
       input[type=range]::-webkit-slider-runnable-track {
         height: 4px; border-radius: 2px;
         background: linear-gradient(to right, var(--accent) 0 var(--fill, 50%), #3a3a3a var(--fill, 50%) 100%);
       }
       input[type=range]::-webkit-slider-thumb {
-        -webkit-appearance: none; margin-top: -4px; width: 12px; height: 12px; border-radius: 50%; background: #d8d8d8;
+        -webkit-appearance: none; margin-top: -4px; width: 11px; height: 11px; border-radius: 50%; background: #d8d8d8;
       }
-      .hide { display: none; }
+
       .foot { margin-top: auto; display: flex; justify-content: flex-end; gap: 8px; }
-      .foot button { appearance: none; border: 0; border-radius: 5px; padding: 7px 16px; font: inherit; cursor: pointer; }
+      .foot button { appearance: none; border: 0; border-radius: 4px; padding: 6px 16px; font: inherit; cursor: pointer; }
       .btn-cancel { background: #4a4a4a; color: var(--text); }
       .btn-apply { background: var(--accent); color: #1c1c1c; font-weight: 600; }
     </style>
@@ -63,55 +68,52 @@
         <span class="count" id="count"></span>
       </div>
       <div class="subtitle" id="subtitle"></div>
-      <canvas id="wave" width="800" height="184"></canvas>
+      <canvas id="wave" width="800" height="168"></canvas>
 
-      <div class="section">Splits</div>
-
-      <div class="ctl">
-        <label>Mode</label>
-        <div class="seg" id="mode">
-          <button data-val="MACRO">MACRO</button>
-          <button data-val="MICRO">MICRO</button>
+      <div class="section"><span class="toggle" id="split-toggle"></span> Splits</div>
+      <div class="body" id="split-body">
+        <div class="row">
+          <label>Mode</label>
+          <div class="seg" id="mode">
+            <button data-val="MACRO">MACRO</button>
+            <button data-val="MICRO">MICRO</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>Cuts</label>
+          <div class="seg" id="cutat">
+            <button data-val="start">Start</button>
+            <button data-val="end">End</button>
+            <button data-val="both">Both</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>Sens</label>
+          <input type="range" id="sens" min="0" max="1" step="0.01" />
         </div>
       </div>
 
-      <div class="ctl">
-        <label>Cuts</label>
-        <div class="seg" id="cutat">
-          <button data-val="start">Start</button>
-          <button data-val="end">End</button>
-          <button data-val="both">Both</button>
+      <div class="section"><span class="toggle" id="strip-toggle"></span> Strip</div>
+      <div class="body" id="strip-body">
+        <div class="row">
+          <label>Action</label>
+          <div class="seg" id="action">
+            <button data-val="deactivate">Deactivate</button>
+            <button data-val="delete">Delete</button>
+          </div>
         </div>
-      </div>
-
-      <div class="ctl">
-        <label>Sensitivity</label>
-        <input type="range" id="sens" min="0" max="1" step="0.01" />
-      </div>
-
-      <div class="section">Strip</div>
-
-      <div class="ctl">
-        <label>Action</label>
-        <div class="seg" id="strip">
-          <button data-val="off">Off</button>
-          <button data-val="deactivate">Deactivate</button>
-          <button data-val="delete">Delete</button>
+        <div class="row">
+          <label>Target</label>
+          <div class="seg" id="thresh">
+            <button data-val="silence">Silence</button>
+            <button data-val="quiet">Quiet</button>
+            <button data-val="content">Content</button>
+          </div>
         </div>
-      </div>
-
-      <div class="ctl hide" id="thresh-row">
-        <label>Target</label>
-        <div class="seg" id="thresh">
-          <button data-val="silence">Silence</button>
-          <button data-val="quiet">Quiet</button>
-          <button data-val="content">Content</button>
+        <div class="row">
+          <label>Amount</label>
+          <input type="range" id="silence" min="0" max="1" step="0.01" />
         </div>
-      </div>
-
-      <div class="ctl hide" id="silence-row">
-        <label>Silence</label>
-        <input type="range" id="silence" min="0" max="1" step="0.01" />
       </div>
 
       <div class="foot">

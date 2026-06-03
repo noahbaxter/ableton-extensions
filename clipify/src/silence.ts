@@ -76,10 +76,22 @@ export interface Detection {
   windowDur: number; // seconds per RMS window
 }
 
+// Smoothed per-window RMS — exported so multiple clips can pool their RMS into one
+// shared noise floor (see floorFromRms).
+export function smoothedRms(channels: Float32Array[], p: DetectParams = DETECT_PARAMS): number[] {
+  return medianFilter(windowRms(channels, p.windowSize), p.smoothingWindows);
+}
+
+// Noise floor (linear RMS) at the configured percentile of a pooled RMS array.
+export function floorFromRms(rms: number[], p: DetectParams = DETECT_PARAMS): number {
+  return percentile(rms, p.noiseFloorPercentile);
+}
+
 export function detectSoundSegments(
   channels: Float32Array[],
   sampleRate: number,
   p: DetectParams = DETECT_PARAMS,
+  floorOverride?: number, // share a noise floor across clips instead of measuring per clip
 ): Detection {
   if (!channels.length || !channels[0]?.length) {
     return { segments: [], noiseFloor: 0, threshold: 0, rms: [], windowDur: p.windowSize / sampleRate };
@@ -89,10 +101,10 @@ export function detectSoundSegments(
   const windowDur = p.windowSize / sampleRate;
   const minSilenceWindows = Math.ceil(p.minSilenceDuration / windowDur);
 
-  const rms = medianFilter(windowRms(channels, p.windowSize), p.smoothingWindows);
+  const rms = smoothedRms(channels, p);
 
   // quiet = a margin above the noise floor, but never below absoluteFloor
-  const noiseFloor = percentile(rms, p.noiseFloorPercentile);
+  const noiseFloor = floorOverride ?? floorFromRms(rms, p);
   const threshold = Math.max(noiseFloor * Math.pow(10, p.thresholdMarginDb / 20), p.absoluteFloor);
   const quiet = rms.map((v) => v < threshold);
 
