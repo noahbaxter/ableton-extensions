@@ -73,6 +73,8 @@ export interface Detection {
   segments: Segment[]; // sound regions to keep, seconds
   noiseFloor: number; // measured floor, linear RMS
   threshold: number; // "quiet" cutoff used, linear RMS
+  rms: number[]; // smoothed per-window RMS (lets candidates.ts probe gap depth)
+  windowDur: number; // seconds per RMS window
 }
 
 export function detectSoundSegments(
@@ -81,7 +83,7 @@ export function detectSoundSegments(
   p: DetectParams = DETECT_PARAMS,
 ): Detection {
   if (!channels.length || !channels[0]?.length) {
-    return { segments: [], noiseFloor: 0, threshold: 0 };
+    return { segments: [], noiseFloor: 0, threshold: 0, rms: [], windowDur: p.windowSize / sampleRate };
   }
 
   const totalDur = channels[0].length / sampleRate;
@@ -133,5 +135,5 @@ export function detectSoundSegments(
     if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
     else merged.push({ ...s });
   }
-  return { segments: merged, noiseFloor, threshold };
+  return { segments: merged, noiseFloor, threshold, rms, windowDur };
 }

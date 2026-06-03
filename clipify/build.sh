@@ -50,9 +50,38 @@ echo "Using node $(node -v)"
 
 [ -d node_modules ] || { echo "Installing dependencies..."; npm install; }
 
+# Launch the dev Extension Host, working around Live's cold-start handshake: Live
+# only connects to a dev host that registers AFTER the previous one disconnects,
+# so from a cold start the first host never completes its greeting (you'd have to
+# run twice). We launch a throwaway host to nudge Live into its ready state, tear
+# it down, then exec the real host in the foreground.
+dev_run() {
+  local cli="node_modules/.bin/extensions-cli"
+  local storage="$PWD/.clipify-dev" # stable storageDirectory so settings persist in dev
+  local log; log="$(mktemp)"
+
+  echo "Warming up Extension Host handshake…"
+  "$cli" run --storage-directory "$storage" >"$log" 2>&1 &
+  local wpid=$!
+  # wait (up to ~8s) for the warm-up host to come up
+  local i
+  for i in $(seq 1 40); do
+    if grep -q "Started: Extension Host" "$log" 2>/dev/null; then break; fi
+    sleep 0.2
+  done
+  sleep 1.5 # let Live register the connection so the kill reads as a disconnect
+  pkill -P "$wpid" 2>/dev/null || true # the host child
+  kill "$wpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+  rm -f "$log"
+
+  echo "Launching Extension Host…"
+  exec "$cli" run --storage-directory "$storage"
+}
+
 case "${1:-package}" in
   package) npm run package; echo "Built: $PWD/dist/clipify.ablx" ;;
   dev)     npm run build:dev ;;
-  run)     npm start ;;
+  run)     npm run build:dev && dev_run ;;
   *)       echo "usage: ./build.sh [package|dev|run]" >&2; exit 2 ;;
 esac

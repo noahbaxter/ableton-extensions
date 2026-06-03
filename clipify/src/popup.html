@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Clipify</title>
+    <style>
+      :root {
+        --bg: #2b2b2b;
+        --line: #454545;
+        --text: #d8d8d8;
+        --dim: #8a8a8a;
+        --accent: #f5a623;
+        --wave: #9a9a9a;
+        --strip: rgba(245, 166, 35, 0.16);
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font: 12px/1.35 -apple-system, "Segoe UI", system-ui, sans-serif;
+        user-select: none;
+      }
+      .wrap { padding: 12px 14px; display: flex; flex-direction: column; height: 100%; gap: 10px; }
+      h1 { font-size: 14px; font-weight: 600; margin: 0; }
+      .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+      .subtitle { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .count { color: var(--accent); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      canvas { width: 100%; height: 92px; display: block; background: #262626; border-radius: 4px; }
+      .ctl { display: flex; align-items: center; gap: 10px; }
+      .ctl > label { color: var(--dim); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; width: 64px; flex: none; }
+      .seg { display: flex; flex: 1; background: #262626; border-radius: 5px; overflow: hidden; }
+      .seg button {
+        flex: 1; appearance: none; border: 0; background: transparent; color: var(--dim);
+        padding: 6px 6px; font: inherit; cursor: pointer; border-right: 1px solid var(--line);
+      }
+      .seg button:last-child { border-right: 0; }
+      .seg button.on { background: #4a4a4a; color: var(--text); }
+      input[type=range] { flex: 1; accent-color: var(--accent); margin: 0; }
+      .hide { display: none; }
+      .foot { margin-top: auto; display: flex; justify-content: flex-end; gap: 8px; }
+      .foot button { appearance: none; border: 0; border-radius: 5px; padding: 7px 16px; font: inherit; cursor: pointer; }
+      .btn-cancel { background: #4a4a4a; color: var(--text); }
+      .btn-apply { background: var(--accent); color: #1c1c1c; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="head">
+        <h1>Clipify</h1>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="subtitle" id="subtitle"></div>
+      <canvas id="wave" width="800" height="184"></canvas>
+
+      <div class="ctl">
+        <label>Mode</label>
+        <div class="seg" id="mode">
+          <button data-val="MACRO">MACRO</button>
+          <button data-val="MICRO">MICRO</button>
+        </div>
+      </div>
+
+      <div class="ctl">
+        <label>Strip</label>
+        <div class="seg" id="strip">
+          <button data-val="off">Off</button>
+          <button data-val="deactivate">Deactivate</button>
+          <button data-val="delete">Delete</button>
+        </div>
+      </div>
+
+      <div class="ctl">
+        <label>Sensitivity</label>
+        <input type="range" id="sens" min="0" max="1" step="0.01" />
+      </div>
+
+      <div class="ctl hide" id="silence-row">
+        <label>Silence</label>
+        <input type="range" id="silence" min="0" max="1" step="0.01" />
+      </div>
+
+      <div class="foot">
+        <button class="btn-cancel" onclick="onCancel()">Cancel</button>
+        <button class="btn-apply" onclick="onApply()">Slice</button>
+      </div>
+    </div>
+
+    <script>
+      var DATA = __DATA__;
+      // MACRO and MICRO keep their own sensitivity; the one slider swaps between them.
+      var state = {
+        mode: DATA.defaults.mode,
+        strip: DATA.defaults.strip,
+        sensMacro: DATA.defaults.sensMacro,
+        sensMicro: DATA.defaults.sensMicro,
+        silence: DATA.defaults.silence,
+      };
+      var current = { cutBeats: [], strips: [] };
+
+      function el(id) { return document.getElementById(id); }
+      function geom(a, b, u) { return a * Math.pow(b / a, u); } // geometric interp
+      function lerp(a, b, t) { return a + (b - a) * t; }
+      function sens() { return state.mode === "MACRO" ? state.sensMacro : state.sensMicro; }
+      function setSens(v) { if (state.mode === "MACRO") state.sensMacro = v; else state.sensMicro = v; }
+
+      // gap-duration threshold (seconds): each mode's sweet spot sits at the slider
+      // centre, with conservative/aggressive range opening up on either side.
+      function thresholdFor(mode, s) {
+        if (mode === "MACRO") {
+          return s < 0.5 ? geom(1.5, 0.7, s / 0.5) : geom(0.7, 0.1, (s - 0.5) / 0.5);
+        }
+        return s < 0.5 ? geom(0.5, 0.02, s / 0.5) : geom(0.02, 0.006, (s - 0.5) / 0.5);
+      }
+
+      function selectCuts() {
+        var thresh = thresholdFor(state.mode, sens());
+        var t = state.silence; // strip extent: 0 = deep middle only, 1 = whole gap
+        var cutBeats = [], strips = [], drawCuts = [], drawStrips = [];
+        function pushStrip(c) {
+          var s0 = lerp(c.cutBeat, c.gapStartBeat, t);
+          var s1 = lerp(c.deepEndBeat, c.gapEndBeat, t);
+          var f0 = lerp(c.cutFrac, c.gapStartFrac, t);
+          var f1 = lerp(c.deepEndFrac, c.gapEndFrac, t);
+          cutBeats.push(s0, s1);
+          strips.push({ start: s0, end: s1 });
+          drawCuts.push(f0, f1);
+          drawStrips.push({ f0: f0, f1: f1 });
+        }
+        DATA.candidates.forEach(function (c) {
+          if (c.edge) {
+            // leading/trailing silence: only meaningful when stripping
+            if (state.strip !== "off" && c.hasDeep) pushStrip(c);
+            return;
+          }
+          var cut = c.durSec >= thresh;
+          if (state.mode === "MACRO") cut = cut && c.hasDeep; // MACRO only cuts real silence
+          if (!cut) return;
+          if (state.strip !== "off" && c.hasDeep) pushStrip(c);
+          else { cutBeats.push(c.cutBeat); drawCuts.push(c.cutFrac); }
+        });
+        current = { cutBeats: cutBeats, strips: strips };
+        draw(drawCuts, drawStrips);
+        var pieces = cutBeats.length + 1;
+        var label = pieces + (pieces === 1 ? " slice" : " slices");
+        if (strips.length) label += " · " + strips.length + " stripped";
+        el("count").textContent = label;
+      }
+
+      function draw(cuts, strips) {
+        var cv = el("wave"), g = cv.getContext("2d");
+        var W = cv.width, H = cv.height, mid = H / 2;
+        var css = getComputedStyle(document.documentElement);
+        g.clearRect(0, 0, W, H);
+
+        g.fillStyle = css.getPropertyValue("--strip");
+        strips.forEach(function (r) {
+          g.fillRect(r.f0 * W, 0, Math.max(1, (r.f1 - r.f0) * W), H);
+        });
+
+        var nf = (DATA.noiseFloorLevel || 0) * mid;
+        g.strokeStyle = "#3a3a3a"; g.lineWidth = 1;
+        g.beginPath();
+        g.moveTo(0, mid - nf); g.lineTo(W, mid - nf);
+        g.moveTo(0, mid + nf); g.lineTo(W, mid + nf); g.stroke();
+
+        var env = DATA.envelope, n = env.length;
+        g.strokeStyle = css.getPropertyValue("--wave");
+        g.beginPath();
+        for (var i = 0; i < n; i++) {
+          var x = (i / n) * W, h = env[i] * mid;
+          g.moveTo(x, mid - h); g.lineTo(x, mid + h);
+        }
+        g.stroke();
+
+        g.strokeStyle = css.getPropertyValue("--accent"); g.lineWidth = 1.5;
+        g.beginPath();
+        cuts.forEach(function (f) { g.moveTo(f * W, 0); g.lineTo(f * W, H); });
+        g.stroke();
+      }
+
+      function bindSeg(id, key, after) {
+        var box = el(id);
+        box.querySelectorAll("button").forEach(function (b) {
+          b.addEventListener("click", function () {
+            state[key] = b.getAttribute("data-val");
+            box.querySelectorAll("button").forEach(function (x) { x.classList.toggle("on", x === b); });
+            if (after) after();
+            selectCuts();
+          });
+          b.classList.toggle("on", b.getAttribute("data-val") === state[key]);
+        });
+      }
+
+      function sendResult(payload) {
+        var msg = JSON.stringify(payload);
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.live) {
+          window.webkit.messageHandlers.live.postMessage({ method: "close_and_send", params: [msg] });
+        } else if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ method: "close_and_send", params: [msg] });
+        }
+      }
+
+      function onCancel() { sendResult({ action: "cancel" }); }
+      function onApply() {
+        sendResult({
+          action: "apply",
+          cutBeats: current.cutBeats,
+          strips: current.strips,
+          stripAction: state.strip,
+          // persisted for next run
+          settings: {
+            mode: state.mode,
+            sensMacro: state.sensMacro,
+            sensMicro: state.sensMicro,
+            strip: state.strip,
+            silence: state.silence,
+          },
+        });
+      }
+
+      window.onload = function () {
+        el("subtitle").textContent = DATA.meta.subtitle || "";
+        el("sens").value = sens();
+        el("silence").value = state.silence;
+        el("sens").addEventListener("input", function () { setSens(parseFloat(this.value)); selectCuts(); });
+        el("silence").addEventListener("input", function () { state.silence = parseFloat(this.value); selectCuts(); });
+        bindSeg("mode", "mode", function () { el("sens").value = sens(); }); // swap slider to the mode's value
+        bindSeg("strip", "strip", function () {
+          el("silence-row").classList.toggle("hide", state.strip === "off");
+        });
+        el("silence-row").classList.toggle("hide", state.strip === "off");
+        selectCuts();
+      };
+    </script>
+  </body>
+</html>
