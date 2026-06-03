@@ -6,6 +6,7 @@ import * as path from "node:path";
 
 export interface Settings {
   mode: "MACRO" | "MICRO";
+  cutAt: "start" | "end" | "both"; // which phrase edges to cut (split mode)
   sensMacro: number; // 0..1, MACRO's own sensitivity
   sensMicro: number; // 0..1, MICRO's own sensitivity
   strip: "off" | "deactivate" | "delete";
@@ -14,6 +15,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   mode: "MACRO",
+  cutAt: "both",
   sensMacro: 0.5,
   sensMicro: 0.7,
   strip: "off",

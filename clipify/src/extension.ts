@@ -8,7 +8,8 @@ import {
   type Handle,
 } from "@ableton-extensions/sdk";
 
-import { runSliceStrip, type Target } from "./slicer.js";
+import { runSliceStrip, runHeadless, type Target } from "./slicer.js";
+import type { Portions } from "./select.js";
 import { splitAtZeroCrossing } from "./splitZero.js";
 
 type Ctx = ReturnType<typeof initialize>;
@@ -16,17 +17,20 @@ type Ctx = ReturnType<typeof initialize>;
 export function activate(activation: ActivationContext) {
   const context = initialize(activation, "1.0.0");
 
-  // Slice & Strip popup — from a clip or a time selection within one
-  context.commands.registerCommand("clipify.sliceStrip", (arg: unknown) => {
-    const target = resolveTarget(context, arg);
-    if (target) void runSliceStrip(context, target).catch((e) => console.error("[clipify]", e));
-  });
-  context.ui.registerContextMenuAction("AudioClip", "Clipify…", "clipify.sliceStrip");
-  context.ui.registerContextMenuAction(
-    "AudioTrack.ArrangementSelection",
-    "Clipify…",
-    "clipify.sliceStrip",
+  // Interactive Slice & Strip popup — from a clip or a time selection within one
+  registerOnClipAndSelection(context, "clipify.sliceStrip", "Clipify…", (target) =>
+    runSliceStrip(context, target),
   );
+
+  // Headless commands — apply the portion(s) with the last-saved settings, no popup
+  const headless: { id: string; label: string; portions: Portions }[] = [
+    { id: "clipify.split", label: "Clipify – Split", portions: { split: true, strip: false } },
+    { id: "clipify.strip", label: "Clipify – Strip", portions: { split: false, strip: true } },
+    { id: "clipify.quick", label: "Clipify Quick", portions: { split: true, strip: true } },
+  ];
+  for (const { id, label, portions } of headless) {
+    registerOnClipAndSelection(context, id, label, (target) => runHeadless(context, target, portions));
+  }
 
   // Standalone split at nearest zero crossing — cursor only, not a time range
   context.commands.registerCommand("clipify.splitZero", (arg: unknown) => {
@@ -44,6 +48,22 @@ export function activate(activation: ActivationContext) {
     "Split at Nearest 0 Crossing",
     "clipify.splitZero",
   );
+}
+
+// Register a command on both the AudioClip and the time-selection scopes, resolving
+// the right-clicked target before running.
+function registerOnClipAndSelection(
+  context: Ctx,
+  id: string,
+  label: string,
+  run: (target: Target) => Promise<void>,
+): void {
+  context.commands.registerCommand(id, (arg: unknown) => {
+    const target = resolveTarget(context, arg);
+    if (target) void run(target).catch((e) => console.error("[clipify]", e));
+  });
+  context.ui.registerContextMenuAction("AudioClip", label, id);
+  context.ui.registerContextMenuAction("AudioTrack.ArrangementSelection", label, id);
 }
 
 function walkToTrack(obj: DataModelObject<"1.0.0">): AudioTrack<"1.0.0"> | null {
