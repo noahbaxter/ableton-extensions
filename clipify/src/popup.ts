@@ -2,9 +2,18 @@
 // selection. All cut/strip decisions come from computeSelection — the popup holds
 // no DSP/selection logic of its own. Bundled into popup.html at build time.
 
-import type { Candidate } from "./candidates.js";
+import type { Candidate, EdgeContext } from "./candidates.js";
 import type { Settings } from "./settings.js";
 import { computeSelection, type ValleyCut } from "./select.js";
+
+interface SerializedEdge {
+  rms: number[];
+  windowDur: number;
+  quietThresh: number;
+  silenceThresh: number;
+  noiseFloor: number;
+  durSec: number;
+}
 
 interface ClipView {
   name: string;
@@ -15,6 +24,7 @@ interface ClipView {
   candidates: Candidate[];
   valleys: ValleyCut[];
   hasContent: boolean;
+  edge: SerializedEdge;
 }
 
 interface PopupData {
@@ -33,6 +43,21 @@ interface ClipDraw {
   cuts: number[]; // window fractions [0,1]
   strips: { f0: number; f1: number }[];
   segments: number[]; // window fractions of segment boundaries (always shown)
+}
+
+function edgeCtxFor(clip: { edge: SerializedEdge; winStartBeat: number; winEndBeat: number }): EdgeContext {
+  const e = clip.edge;
+  const span = e.durSec || 1;
+  const beatPerSec = (clip.winEndBeat - clip.winStartBeat) / span;
+  return {
+    rms: e.rms,
+    windowDur: e.windowDur,
+    quietThresh: e.quietThresh,
+    silenceThresh: e.silenceThresh,
+    noiseFloor: e.noiseFloor,
+    frac: (sec: number) => sec / span,
+    secToArrBeat: (sec: number) => clip.winStartBeat + sec * beatPerSec,
+  };
 }
 
 const el = (id: string) => document.getElementById(id) as HTMLElement;
@@ -56,7 +81,7 @@ function selectCuts(): void {
       strips += 1; // whole clip is below threshold → stripped entirely
       return { clip, cuts: [], strips: [{ f0: 0, f1: 1 }], segments: [] };
     }
-    const r = computeSelection(clip.candidates, state, portions, clip.winStartBeat, clip.winEndBeat, clip.valleys);
+    const r = computeSelection(clip.candidates, state, portions, clip.winStartBeat, clip.winEndBeat, clip.valleys, edgeCtxFor(clip));
     cuts += r.drawCuts.length; // visible slice cuts only — strip boundaries are shown as fill, not counted as slices
     strips += r.strips.length;
     return { clip, cuts: r.drawCuts, strips: r.drawStrips, segments: r.drawSegments };
@@ -424,6 +449,52 @@ function init(): void {
   bindSeg("cutat", "cutAt");
   bindSeg("action", "stripAction");
   bindSeg("thresh", "thresh");
+
+  // Edge: bipolar creep. Slider 0..1 -> stripEdge -1..+1 (0.5 = boundary, no change).
+  const edgeInput = el("edge") as HTMLInputElement;
+  const edgeVal = el("edge-val");
+  const edgePaint = () => {
+    edgeInput.style.setProperty("--fill", parseFloat(edgeInput.value) * 100 + "%");
+    const amt = parseFloat(edgeInput.value) * 2 - 1; // -1..+1
+    edgeVal.textContent =
+      amt === 0 ? "0"
+      : state.stripEdgeMode === "level"
+        ? (amt > 0 ? "+" : "") + Math.round(amt * 18) + " dB"
+        : (amt > 0 ? "+" : "") + Math.round(amt * 100) + "%";
+  };
+  const edgeRefresh = () => { edgeInput.value = String((state.stripEdge + 1) / 2); edgePaint(); };
+  edgeRefresh();
+  edgeInput.addEventListener("input", () => {
+    state.stripEdge = parseFloat(edgeInput.value) * 2 - 1;
+    edgePaint();
+    selectCuts();
+  });
+  edgeInput.addEventListener("dblclick", () => {
+    state.stripEdge = 0;
+    edgeInput.value = "0.5";
+    edgePaint();
+    selectCuts();
+  });
+
+  // Clamp (Level mode only): 0..100ms. Greyed in Time mode.
+  const clampInput = el("edgeclamp") as HTMLInputElement;
+  const clampVal = el("edgeclamp-val");
+  const clampSync = () => {
+    const active = state.stripEdgeMode === "level";
+    clampInput.disabled = !active;
+    clampInput.style.setProperty("--fill", Number(clampInput.value) + "%");
+    clampVal.textContent = !active ? "-" : Number(clampInput.value) === 0 ? "off" : clampInput.value + " ms";
+  };
+  clampInput.value = String(state.stripEdgeClampMs);
+  clampSync();
+  clampInput.addEventListener("input", () => {
+    state.stripEdgeClampMs = parseInt(clampInput.value, 10);
+    clampSync();
+    selectCuts();
+  });
+
+  bindSeg("edgemode", "stripEdgeMode", () => { edgePaint(); clampSync(); });
+
   wireNormalize();
   wireMaxChange();
 

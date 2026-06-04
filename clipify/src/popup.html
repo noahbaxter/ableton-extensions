@@ -126,6 +126,23 @@
             <button data-val="content">Content</button>
           </div>
         </div>
+        <div class="row">
+          <label>Edge</label>
+          <input type="range" id="edge" min="0" max="1" step="0.01" />
+          <span class="val" id="edge-val"></span>
+        </div>
+        <div class="row">
+          <label>By</label>
+          <div class="seg" id="edgemode">
+            <button data-val="level">Level</button>
+            <button data-val="time">Time</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>Clamp</label>
+          <input type="range" id="edgeclamp" min="0" max="100" step="1" />
+          <span class="val" id="edgeclamp-val"></span>
+        </div>
       </div>
 
       <div class="section"><span class="toggle" id="level-toggle"></span> Level</div>

@@ -46,6 +46,7 @@ interface ClipPrep {
   envelope: number[]; // empty unless requested
   noiseFloor: number;
   hasContent: boolean; // false when the whole window is below threshold
+  durSec: number;
 }
 
 // Render every target's window and build its cut candidates. The render is in
@@ -113,6 +114,7 @@ async function prepareAll(
       envelope: withEnvelope ? buildEnvelope(d.channels, d.sampleRate, 0, d.durSec) : [],
       noiseFloor: detection.noiseFloor,
       hasContent: detection.segments.length > 0,
+      durSec: d.durSec,
     };
   });
 }
@@ -134,6 +136,14 @@ export async function runSliceStrip(context: Ctx, targets: Target[]): Promise<vo
       candidates: p.candidates,
       valleys: p.valleys,
       hasContent: p.hasContent,
+      edge: {
+        rms: p.edge.rms,
+        windowDur: p.edge.windowDur,
+        quietThresh: p.edge.quietThresh,
+        silenceThresh: p.edge.silenceThresh,
+        noiseFloor: p.edge.noiseFloor,
+        durSec: p.durSec,
+      },
     })),
     spanStartBeat,
     spanEndBeat,
