@@ -20,7 +20,9 @@ export interface Settings {
   stripOn: boolean; // STRIP section enabled
   stripAction: "deactivate" | "delete";
   thresh: "silence" | "quiet" | "content"; // what the strip targets
-  silence: number; // 0..1, strip-zone extent
+  stripEdge: number; // -1..+1, 0 = detected boundary. + tightens (into attack/release), - loosens
+  stripEdgeMode: "level" | "time"; // which engine the Edge knob drives
+  stripEdgeClampMs: number; // Level mode: cap edge travel (ms); 0 = off
   // level
   levelOn: boolean; // LEVEL section enabled
   levelTarget: "ceiling" | "average"; // push every clip toward the ceiling, or toward their mean (preserves overall loudness)
@@ -43,7 +45,9 @@ const DEFAULTS: Settings = {
   stripOn: false,
   stripAction: "deactivate",
   thresh: "quiet",
-  silence: 0.5,
+  stripEdge: 0,
+  stripEdgeMode: "level",
+  stripEdgeClampMs: 0,
   levelOn: false,
   levelTarget: "average",
   ceilingDb: -1,
