@@ -16,7 +16,9 @@ const base: Settings = {
   stripOn: false,
   stripAction: "deactivate",
   thresh: "quiet",
-  silence: 0.5,
+  stripEdge: 0,
+  stripEdgeMode: "level",
+  stripEdgeClampMs: 0,
   levelOn: false,
   levelTarget: "average",
   ceilingDb: -1,
@@ -85,13 +87,13 @@ const twoGaps = [
 const stripOnly = { split: false, strip: true };
 
 test("cull off (cullDb=0): two gaps stay two separate strip regions", () => {
-  const s = { ...base, cullDb: 0, silence: 0.5 };
+  const s = { ...base, cullDb: 0 };
   const sel = computeSelection(twoGaps as any, s, stripOnly, 0, 10);
   assert.equal(sel.strips.length, 2);
 });
 
 test("cull on: gaps around a culled segment merge into one expanded region (no new section)", () => {
-  const s = { ...base, cullDb: 10, silence: 0.5 };
+  const s = { ...base, cullDb: 10 };
   const sel = computeSelection(twoGaps as any, s, stripOnly, 0, 10);
   assert.equal(sel.strips.length, 1);
   assert.deepEqual(sel.strips[0], { start: 1.2, end: 4.8 });
@@ -133,7 +135,7 @@ test("cull on: a shallow (no-deep) gap merges using its gap edge, not the midpoi
     },
     twoGaps[1],
   ];
-  const s = { ...base, cullDb: 10, silence: 0.5 };
+  const s = { ...base, cullDb: 10 };
   const sel = computeSelection(shallowFirst as any, s, stripOnly, 0, 10);
   assert.equal(sel.strips.length, 1);
   assert.equal(sel.strips[0]!.start, 1); // gap1.gapStartBeat, not the 1.5 midpoint
@@ -147,7 +149,7 @@ test("cull on: a chain of culled segments merges every gap into one region", () 
     prevLevelDb: prev, nextLevelDb: next,
   });
   const threeGaps = [g(1, 2, 1.2, 1.8, 30, 4), g(3, 4, 3.2, 3.8, 4, 4), g(5, 6, 5.2, 5.8, 4, 30)];
-  const s = { ...base, cullDb: 10, silence: 0.5 };
+  const s = { ...base, cullDb: 10 };
   const sel = computeSelection(threeGaps as any, s, stripOnly, 0, 10);
   assert.equal(sel.strips.length, 1);
   assert.deepEqual(sel.strips[0], { start: 1.2, end: 5.8 });
@@ -164,7 +166,7 @@ test("cull on: a culled FIRST segment (no leading gap) folds back to the window 
       prevLevelDb: 4, nextLevelDb: 30,
     },
   ];
-  const s = { ...base, cullDb: 10, silence: 0.5 };
+  const s = { ...base, cullDb: 10 };
   const sel = computeSelection(cands as any, s, stripOnly, 0, 10);
   assert.equal(sel.strips.length, 1);
   assert.equal(sel.strips[0]!.start, 0); // extended back to winStartBeat
@@ -179,7 +181,7 @@ test("strip pins a trailing edge gap to the window end regardless of Amount (no 
       prevLevelDb: 30, nextLevelDb: null,
     },
   ];
-  const s = { ...base, silence: 0.5 }; // Amount 0.5 would otherwise stop the strip at beat 9
+  const s = { ...base }; // stripEdge: 0 (default) still pins edge gaps to the window boundary
   const sel = computeSelection(trail as any, s, { split: false, strip: true }, 0, 10);
   assert.equal(sel.strips[0]!.end, 10);
 });
@@ -195,7 +197,7 @@ test("cull on (MACRO): a culled last segment behind a short gap still folds to t
       prevLevelDb: 30, nextLevelDb: 4,
     },
   ];
-  const s = { ...base, mode: "MACRO" as const, cullDb: 10, silence: 0.5 };
+  const s = { ...base, mode: "MACRO" as const, cullDb: 10 };
   const sel = computeSelection(cands as any, s, { split: false, strip: true }, 0, 10);
   assert.equal(sel.strips.length, 1);
   assert.equal(sel.strips[0]!.end, 10);
@@ -210,8 +212,16 @@ test("cull on: a culled LAST segment (no trailing gap) folds out to the window e
       prevLevelDb: 30, nextLevelDb: 4,
     },
   ];
-  const s = { ...base, cullDb: 10, silence: 0.5 };
+  const s = { ...base, cullDb: 10 };
   const sel = computeSelection(cands as any, s, stripOnly, 0, 10);
   assert.equal(sel.strips.length, 1);
   assert.equal(sel.strips[0]!.end, 10); // extended out to winEndBeat
+});
+
+test("stripEdge default (0) places strip edges on the detected extent", () => {
+  const s = { ...base, stripOn: true };
+  const sel = computeSelection(twoGaps as any, s, stripOnly, 0, 10);
+  // unchanged from the cull-off case: edges at the quiet extents
+  assert.deepEqual(sel.strips[0], { start: 1.2, end: 1.8 });
+  assert.deepEqual(sel.strips[1], { start: 4.2, end: 4.8 });
 });
