@@ -10,7 +10,7 @@
 
 import { initialize, AudioClip, AudioTrack } from "@ableton-extensions/sdk";
 
-import { detectSoundSegments, smoothedRms, floorFromRms } from "./silence.js";
+import { detectSoundSegments, smoothedRms, floorFromRms, segmentLevelDb } from "./silence.js";
 import { buildCandidates, type Candidate } from "./candidates.js";
 import { findValleys } from "./valleys.js";
 import { snapToZeroCrossing } from "./zeroCross.js";
@@ -93,12 +93,13 @@ async function prepareAll(
       sampleRate: d.sampleRate,
     });
     const span = d.durSec || 1;
-    const valleys: ValleyCut[] = detection.segments.flatMap((seg) =>
-      findValleys(d.channels, d.sampleRate, seg.start, seg.end, detection.noiseFloor).map((v) => {
+    const valleys: ValleyCut[] = detection.segments.flatMap((seg) => {
+      const segLevelDb = segmentLevelDb(detection.rms, detection.windowDur, seg.start, seg.end, detection.noiseFloor);
+      return findValleys(d.channels, d.sampleRate, seg.start, seg.end, detection.noiseFloor).map((v) => {
         const t = snapToZeroCrossing(d.channels, d.sampleRate, v.timeSec);
-        return { cutBeat: d.secToArrBeat(t), cutFrac: t / span, depthRatio: v.depthRatio, widthSec: v.widthSec };
-      }),
-    );
+        return { cutBeat: d.secToArrBeat(t), cutFrac: t / span, depthRatio: v.depthRatio, widthSec: v.widthSec, segLevelDb };
+      });
+    });
     debug.log(
       `prepare "${d.target.clip.name}"  floor ${debug.db(detection.noiseFloor)}dB  ` +
         `${detection.segments.length} segments  ${candidates.length} gaps  ${valleys.length} valleys`,

@@ -22,6 +22,7 @@ export interface ValleyCut {
   cutFrac: number; // window fraction [0,1] of the dip (for the canvas)
   depthRatio: number; // 0..1, fall toward the floor relative to neighbouring peaks
   widthSec: number; // dip width at half-depth
+  segLevelDb: number; // level (dB above floor) of the segment this valley sits in
 }
 
 const EPS = 0.001;
@@ -57,8 +58,72 @@ function zone(c: Candidate, ext: Extent, sil: number) {
   };
 }
 
+// Cull: a sound segment quieter than cullDb (dB above the floor) folds into the
+// surrounding silence — the gaps on either side of it merge into one expanded gap, so
+// every transform downstream sees fewer, bigger silences instead of a new region.
+// Default cullDb=0 is a no-op (every real segment is > 0 dB above the floor). The
+// segment between gap `prev` and gap `c` is culled iff prev.nextLevelDb < cullDb. A
+// culled first/last segment has no gap on its outer side, so after merging the head
+// and tail gaps are extended to the window edge to fold those in too.
+function mergeCulledGaps(cands: Candidate[], cullDb: number, winStartBeat: number, winEndBeat: number): Candidate[] {
+  if (cullDb <= 0) return cands;
+  const out: Candidate[] = [];
+  for (const c of cands) {
+    const prev = out[out.length - 1];
+    if (prev && prev.nextLevelDb != null && prev.nextLevelDb < cullDb) {
+      // merged silence runs from prev's start edge to c's end edge; where a source gap
+      // has no deep silence its cut point is a midpoint, so fall back to the gap edge.
+      const span = (pe: Extent, ce: Extent): Extent => ({
+        hasDeep: true,
+        cutBeat: pe.hasDeep ? pe.cutBeat : prev.gapStartBeat,
+        cutFrac: pe.hasDeep ? pe.cutFrac : prev.gapStartFrac,
+        deepEndBeat: ce.hasDeep ? ce.deepEndBeat : c.gapEndBeat,
+        deepEndFrac: ce.hasDeep ? ce.deepEndFrac : c.gapEndFrac,
+      });
+      out[out.length - 1] = {
+        ...prev,
+        durSec: prev.durSec + c.durSec,
+        edge: prev.edge || c.edge,
+        gapEndFrac: c.gapEndFrac,
+        gapEndBeat: c.gapEndBeat,
+        quiet: span(prev.quiet, c.quiet),
+        silence: span(prev.silence, c.silence),
+        nextLevelDb: c.nextLevelDb,
+      };
+    } else {
+      out.push(c);
+    }
+  }
+
+  // a culled FIRST segment (clip opens on content, no leading-silence gap) has no gap
+  // to fold back into → extend the head gap out to the window start. Likewise the tail.
+  const first = out[0];
+  if (first && first.prevLevelDb != null && first.prevLevelDb < cullDb) {
+    out[0] = {
+      ...first,
+      gapStartBeat: winStartBeat,
+      gapStartFrac: 0,
+      quiet: { ...first.quiet, hasDeep: true, cutBeat: winStartBeat, cutFrac: 0 },
+      silence: { ...first.silence, hasDeep: true, cutBeat: winStartBeat, cutFrac: 0 },
+      prevLevelDb: null,
+    };
+  }
+  const last = out[out.length - 1];
+  if (last && last.nextLevelDb != null && last.nextLevelDb < cullDb) {
+    out[out.length - 1] = {
+      ...last,
+      gapEndBeat: winEndBeat,
+      gapEndFrac: 1,
+      quiet: { ...last.quiet, hasDeep: true, deepEndBeat: winEndBeat, deepEndFrac: 1 },
+      silence: { ...last.silence, hasDeep: true, deepEndBeat: winEndBeat, deepEndFrac: 1 },
+      nextLevelDb: null,
+    };
+  }
+  return out;
+}
+
 export function computeSelection(
-  cands: Candidate[],
+  rawCands: Candidate[],
   s: Settings,
   p: Portions,
   winStartBeat: number,
@@ -66,6 +131,7 @@ export function computeSelection(
   valleys: ValleyCut[] = [],
 ): Selection {
   const thresh = thresholdFor(s.mode, s.mode === "MACRO" ? s.sensMacro : s.sensMicro);
+  const cands = mergeCulledGaps(rawCands, s.cullDb, winStartBeat, winEndBeat);
   const sel: Selection = { cutBeats: [], strips: [], drawCuts: [], drawStrips: [] };
   const cut = (beat: number, frac: number) => {
     sel.cutBeats.push(beat);
@@ -111,6 +177,7 @@ export function computeSelection(
       }
     }
   }
+
   // Stage 3 — intra-segment valley cuts (split only; never a strip region). Additive:
   // depthRatio is clamped to [0,1], so the default valleyDepth of 1 admits nothing
   // (strict >, since a dip to the floor clamps to exactly 1) — a no-op until the depth
@@ -118,7 +185,9 @@ export function computeSelection(
   if (p.split) {
     const minWidthSec = s.valleyMinWidthMs / 1000;
     for (const v of valleys) {
-      if (v.depthRatio > s.valleyDepth && v.widthSec >= minWidthSec) cut(v.cutBeat, v.cutFrac);
+      const inCulledSeg = s.cullDb > 0 && v.segLevelDb < s.cullDb;
+      if (!inCulledSeg && v.depthRatio > s.valleyDepth && v.widthSec >= minWidthSec)
+        cut(v.cutBeat, v.cutFrac);
     }
   }
   return sel;

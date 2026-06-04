@@ -231,6 +231,30 @@ function wireSlider(id: string, get: () => number, set: (v: number) => void): HT
   return input;
 }
 
+// Slider that shows a units readout in its adjacent .val span. The 0..1 slider value
+// maps to the setting via get/set; fmt turns the slider value into the readout text.
+// No double-click reset (these controls' "off" is an end of the range, not the middle).
+function wireReadoutSlider(
+  id: string,
+  get: () => number,
+  set: (v: number) => void,
+  fmt: (sliderVal: number) => string,
+): void {
+  const input = el(id) as HTMLInputElement;
+  const val = el(id + "-val");
+  const paint = () => {
+    fill(input);
+    val.textContent = fmt(parseFloat(input.value));
+  };
+  input.value = String(get());
+  paint();
+  input.addEventListener("input", () => {
+    set(parseFloat(input.value));
+    paint();
+    selectCuts();
+  });
+}
+
 function sendResult(payload: unknown): void {
   const msg = JSON.stringify(payload);
   const w = window as unknown as {
@@ -287,12 +311,20 @@ function init(): void {
     () => state.silence,
     (v) => (state.silence = v),
   );
-  // TEMP: audition control for valley cuts (final control design is deferred).
-  // Slider 0 = off (depth 1.0); 1 = most cuts (depth 0.2).
-  wireSlider(
+  // Detail (valley sensitivity): 0% = off (depth 1.0), 100% = most cuts (depth 0.2).
+  wireReadoutSlider(
     "detail",
     () => (1 - state.valleyDepth) / 0.8,
     (v) => (state.valleyDepth = 1 - 0.8 * v),
+    (v) => Math.round(v * 100) + "%",
+  );
+  // Cull: how far above the noise floor a segment must reach to survive, 0–40 dB (0 = off).
+  // Past ~40 dB you'd be culling genuinely loud content, so the range stops there.
+  wireReadoutSlider(
+    "cull",
+    () => state.cullDb / 40,
+    (v) => (state.cullDb = 40 * v),
+    (v) => Math.round(v * 40) + " dB",
   );
 
   bindToggle("split-toggle", "splitOn", "split-body");

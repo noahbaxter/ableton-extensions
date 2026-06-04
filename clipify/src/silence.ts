@@ -87,6 +87,24 @@ export function floorFromRms(rms: number[], p: DetectParams = DETECT_PARAMS): nu
   return percentile(rms, p.noiseFloorPercentile);
 }
 
+// High-percentile RMS of the windows spanning [startSec, endSec), in dB above the
+// noise floor. Used by cull to decide whether a detected segment is a real event.
+export function segmentLevelDb(
+  rms: number[],
+  windowDur: number,
+  startSec: number,
+  endSec: number,
+  noiseFloor: number,
+): number {
+  if (noiseFloor <= 0) return 0;
+  const i0 = Math.max(0, Math.floor(startSec / windowDur));
+  const i1 = Math.min(rms.length, Math.ceil(endSec / windowDur));
+  const slice = rms.slice(i0, i1);
+  if (!slice.length) return 0;
+  const level = percentile(slice, 0.9);
+  return level > 0 ? 20 * Math.log10(level / noiseFloor) : 0;
+}
+
 export function detectSoundSegments(
   channels: Float32Array[],
   sampleRate: number,

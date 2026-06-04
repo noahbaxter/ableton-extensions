@@ -11,6 +11,7 @@ export interface Settings {
   sensMicro: number; // 0..1, MICRO's own sensitivity
   valleyDepth: number; // min dip depth (0..1, peak→floor) to cut inside a segment; 1 = off
   valleyMinWidthMs: number; // a dip must last at least this long to count as a cut
+  cullDb: number; // segments quieter than this (dB above floor) fold into silence; 0 = off
   // splits
   splitOn: boolean; // SPLITS section enabled
   cutAt: "start" | "end" | "both"; // which phrase edges to cut
@@ -33,6 +34,7 @@ const DEFAULTS: Settings = {
   sensMicro: 0.7,
   valleyDepth: 1, // off — admits no intra-segment valleys (today's behaviour)
   valleyMinWidthMs: 25,
+  cullDb: 0, // off — culls nothing (every real segment is > 0 dB above the floor)
   splitOn: true,
   cutAt: "both",
   stripOn: false,

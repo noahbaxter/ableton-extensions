@@ -12,6 +12,7 @@
 // silence, so everything after it rides forward.
 
 import type { Detection } from "./silence.js";
+import { segmentLevelDb } from "./silence.js";
 import { snapToZeroCrossing } from "./zeroCross.js";
 
 const QUIET_MARGIN_DB = 9; // RMS within this of the noise floor counts as "quiet"
@@ -36,6 +37,8 @@ export interface Candidate {
   gapEndBeat: number;
   quiet: Extent; // noise-floor silence
   silence: Extent; // true digital silence
+  prevLevelDb: number | null; // sound segment before this gap (null = window edge)
+  nextLevelDb: number | null; // sound segment after this gap
 }
 
 interface Window {
@@ -98,17 +101,22 @@ export function buildCandidates(detection: Detection, win: Window): Candidate[] 
     .filter((s) => s.end - s.start > 0);
   if (!segs.length) return [];
 
+  // each sound segment's level (dB above the floor) — tags the gaps so cull can decide
+  // which segments fold into silence
+  const segLevels = segs.map((sg) => segmentLevelDb(rms, windowDur, sg.start, sg.end, noiseFloor));
+  const levelOf = (i: number): number | null => (i >= 0 && i < segLevels.length ? segLevels[i]! : null);
+
   // gaps: leading silence (window → first sound), gaps between sounds, trailing silence
-  const gaps: { start: number; end: number; edge: boolean }[] = [];
+  const gaps: { start: number; end: number; edge: boolean; prevIdx: number; nextIdx: number }[] = [];
   if (segs[0]!.start - win.startSec >= MIN_DEEP_SEC) {
-    gaps.push({ start: win.startSec, end: segs[0]!.start, edge: true });
+    gaps.push({ start: win.startSec, end: segs[0]!.start, edge: true, prevIdx: -1, nextIdx: 0 });
   }
   for (let i = 0; i < segs.length - 1; i++) {
-    gaps.push({ start: segs[i]!.end, end: segs[i + 1]!.start, edge: false });
+    gaps.push({ start: segs[i]!.end, end: segs[i + 1]!.start, edge: false, prevIdx: i, nextIdx: i + 1 });
   }
   const lastSeg = segs[segs.length - 1]!;
   if (win.endSec - lastSeg.end >= MIN_DEEP_SEC) {
-    gaps.push({ start: lastSeg.end, end: win.endSec, edge: true });
+    gaps.push({ start: lastSeg.end, end: win.endSec, edge: true, prevIdx: segs.length - 1, nextIdx: -1 });
   }
 
   const out: Candidate[] = [];
@@ -126,6 +134,8 @@ export function buildCandidates(detection: Detection, win: Window): Candidate[] 
       gapEndBeat: win.secToArrBeat(gapEndSec),
       quiet: extentAt(gap.start, gap.end, quietThresh),
       silence: extentAt(gap.start, gap.end, SILENCE_LEVEL),
+      prevLevelDb: levelOf(gap.prevIdx),
+      nextLevelDb: levelOf(gap.nextIdx),
     });
   }
   return out;
