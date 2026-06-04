@@ -56,6 +56,7 @@ function edgeCtxFor(clip: { edge: SerializedEdge; winStartBeat: number; winEndBe
     silenceThresh: e.silenceThresh,
     noiseFloor: e.noiseFloor,
     frac: (sec: number) => sec / span,
+    // preview reads only frac(); secToArrBeat's beats are required by the type but discarded
     secToArrBeat: (sec: number) => clip.winStartBeat + sec * beatPerSec,
   };
 }
@@ -454,8 +455,9 @@ function init(): void {
   const edgeInput = el("edge") as HTMLInputElement;
   const edgeVal = el("edge-val");
   const edgePaint = () => {
-    edgeInput.style.setProperty("--fill", parseFloat(edgeInput.value) * 100 + "%");
-    const amt = parseFloat(edgeInput.value) * 2 - 1; // -1..+1
+    const v = parseFloat(edgeInput.value);
+    edgeInput.style.setProperty("--fill", v * 100 + "%");
+    const amt = v * 2 - 1; // -1..+1
     edgeVal.textContent =
       amt === 0 ? "0"
       : state.stripEdgeMode === "level"
@@ -482,7 +484,7 @@ function init(): void {
   const clampSync = () => {
     const active = state.stripEdgeMode === "level";
     clampInput.disabled = !active;
-    clampInput.style.setProperty("--fill", Number(clampInput.value) + "%");
+    clampInput.style.setProperty("--fill", (Number(clampInput.value) / Number(clampInput.max)) * 100 + "%");
     clampVal.textContent = !active ? "-" : Number(clampInput.value) === 0 ? "off" : clampInput.value + " ms";
   };
   clampInput.value = String(state.stripEdgeClampMs);

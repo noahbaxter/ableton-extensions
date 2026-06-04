@@ -24,6 +24,23 @@ import popupHtml from "./popup.html";
 
 type Ctx = ReturnType<typeof initialize>;
 
+// The popup embeds the rms envelope in a data URL, so cap it for long clips. Max-pool
+// (not decimate) so a transient between kept samples is not skipped, and scale windowDur
+// by the same factor so placeEdge's index walk stays in real seconds. Headless apply
+// uses the full-resolution rms; only the popup preview sees this coarser copy.
+const EDGE_RMS_CAP = 4000;
+function capRms(rms: number[], windowDur: number): { rms: number[]; windowDur: number } {
+  if (rms.length <= EDGE_RMS_CAP) return { rms, windowDur };
+  const k = Math.ceil(rms.length / EDGE_RMS_CAP);
+  const out: number[] = [];
+  for (let i = 0; i < rms.length; i += k) {
+    let m = 0;
+    for (let j = i; j < Math.min(i + k, rms.length); j++) m = Math.max(m, rms[j] ?? 0);
+    out.push(m);
+  }
+  return { rms: out, windowDur: windowDur * k };
+}
+
 const DEDUPE_BEATS = 1e-4; // cut beats closer than this collapse to one
 
 export interface Target {
@@ -136,14 +153,17 @@ export async function runSliceStrip(context: Ctx, targets: Target[]): Promise<vo
       candidates: p.candidates,
       valleys: p.valleys,
       hasContent: p.hasContent,
-      edge: {
-        rms: p.edge.rms,
-        windowDur: p.edge.windowDur,
-        quietThresh: p.edge.quietThresh,
-        silenceThresh: p.edge.silenceThresh,
-        noiseFloor: p.edge.noiseFloor,
-        durSec: p.durSec,
-      },
+      edge: (() => {
+        const c = capRms(p.edge.rms, p.edge.windowDur);
+        return {
+          rms: c.rms,
+          windowDur: c.windowDur,
+          quietThresh: p.edge.quietThresh,
+          silenceThresh: p.edge.silenceThresh,
+          noiseFloor: p.edge.noiseFloor,
+          durSec: p.durSec,
+        };
+      })(),
     })),
     spanStartBeat,
     spanEndBeat,
