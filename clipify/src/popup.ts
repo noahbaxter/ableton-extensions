@@ -133,7 +133,19 @@ function draw(clips: ClipDraw[]): void {
 
     // strip regions
     g.fillStyle = stripColor;
-    for (const r of d.strips) g.fillRect(x0 + r.f0 * cw, 0, Math.max(1, (r.f1 - r.f0) * cw), H);
+    for (const r of d.strips) {
+      g.fillRect(x0 + r.f0 * cw, 0, Math.max(1, (r.f1 - r.f0) * cw), H);
+      // edge markers: show exactly where the Edge knob landed each strip boundary
+      g.strokeStyle = "rgba(225, 75, 75, 0.9)";
+      g.lineWidth = 1;
+      for (const fx of [r.f0, r.f1]) {
+        const x = Math.round(x0 + fx * cw) + 0.5;
+        g.beginPath();
+        g.moveTo(x, 0);
+        g.lineTo(x, H);
+        g.stroke();
+      }
+    }
 
     // noise floor reference
     const nf = (d.clip.noiseFloorLevel || 0) * mid;
