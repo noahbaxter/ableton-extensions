@@ -499,11 +499,11 @@ function init(): void {
     selectCuts();
   });
 
-  // Clamp (Level mode only): 0..100ms. Greyed in Time mode and in Content mode.
+  // Clamp: 0..200ms. Active in both Level and Time modes; greyed only in Content mode.
   const clampInput = el("edgeclamp") as HTMLInputElement;
   const clampVal = el("edgeclamp-val");
   const clampSync = () => {
-    const active = state.stripEdgeMode === "level" && edgeActive();
+    const active = edgeActive();
     clampInput.disabled = !active;
     clampInput.style.setProperty("--fill", (Number(clampInput.value) / Number(clampInput.max)) * 100 + "%");
     clampVal.textContent = !active ? "-" : Number(clampInput.value) === 0 ? "off" : clampInput.value + " ms";

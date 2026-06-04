@@ -46,6 +46,13 @@ test("level clamp caps travel in ms", () => {
   assert.ok(edge <= boundarySec + 0.005 + 1e-9, `clamp exceeded: ${edge}`);
 });
 
+test("time clamp caps travel in ms", () => {
+  const p: EdgeParams = { mode: "time", amount: 1, clampMs: 5 }; // 5ms cap
+  const edge = placeEdge(boundarySec, 1, boundaryLevel, ctx, p);
+  assert.ok(edge <= boundarySec + 0.005 + 1e-9, `clamp exceeded: ${edge}`);
+  assert.ok(edge > boundarySec, `expected some forward travel, got ${edge}`);
+});
+
 test("time tighten moves the edge a fraction of the attack span toward the sound", () => {
   const p: EdgeParams = { mode: "time", amount: 0.5, clampMs: 0 };
   const edge = placeEdge(boundarySec, 1, boundaryLevel, ctx, p);

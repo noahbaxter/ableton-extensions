@@ -163,21 +163,27 @@ export function computeSelection(
       // along the envelope; with no context (tests) or amount 0 it stays on the boundary.
       let b0 = ext.cutBeat, f0 = ext.cutFrac;
       let b1 = ext.deepEndBeat, f1 = ext.deepEndFrac;
+      let collapsed = false;
       if (edge && s.stripEdge !== 0 && ext.cutSec != null && ext.deepEndSec != null) {
         const ep: EdgeParams = { mode: s.stripEdgeMode, amount: s.stripEdge, clampMs: s.stripEdgeClampMs };
         const lvl = s.thresh === "silence" ? edge.silenceThresh : edge.quietThresh;
         const startSec = placeEdge(ext.cutSec, -1, lvl, edge, ep); // sound to the LEFT
         const endSec = placeEdge(ext.deepEndSec, 1, lvl, edge, ep); // sound to the RIGHT
-        // if the walked edges crossed (degenerate strip), keep the detected boundary
         if (endSec > startSec) {
           b0 = edge.secToArrBeat(startSec); f0 = Math.max(0, Math.min(1, edge.frac(startSec)));
           b1 = edge.secToArrBeat(endSec); f1 = Math.max(0, Math.min(1, edge.frac(endSec)));
+        } else {
+          // loosened past the point of having anything to strip: drop this region
+          // entirely rather than snapping back to the full detected silence.
+          collapsed = true;
         }
       }
-      // edge-pin: a strip reaching a window edge goes fully to it, no leftover sliver.
-      if (c.gapStartFrac <= EPS) { b0 = winStartBeat; f0 = 0; }
-      if (c.gapEndFrac >= 1 - EPS) { b1 = winEndBeat; f1 = 1; }
-      strip(b0, b1, f0, f1);
+      if (!collapsed) {
+        // edge-pin: a strip reaching a window edge goes fully to it, no leftover sliver.
+        if (c.gapStartFrac <= EPS) { b0 = winStartBeat; f0 = 0; }
+        if (c.gapEndFrac >= 1 - EPS) { b1 = winEndBeat; f1 = 1; }
+        if (f1 - f0 > EPS) strip(b0, b1, f0, f1);
+      }
     } else if (p.split) {
       if (!ext.hasDeep) {
         cut(ext.cutBeat, ext.cutFrac);

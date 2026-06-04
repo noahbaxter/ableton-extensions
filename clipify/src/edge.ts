@@ -15,7 +15,7 @@ export interface EdgeCtx {
 export interface EdgeParams {
   mode: EdgeMode;
   amount: number; // -1..+1, 0 = center. + = tighten (into sound), - = loosen (toward floor)
-  clampMs: number; // 0 = off; Level mode only, caps travel
+  clampMs: number; // 0 = off; caps travel in both Level and Time modes
 }
 
 // Both are starting points to tune by feel in Live, not load-bearing.
@@ -35,10 +35,14 @@ export function placeEdge(
   p: EdgeParams,
 ): number {
   if (p.amount === 0) return boundarySec;
-  const raw =
+  let raw =
     p.mode === "level"
       ? walkLevel(boundarySec, soundDir, boundaryLevel, ctx, p)
       : walkTime(boundarySec, soundDir, ctx, p);
+  if (p.clampMs > 0) {
+    const cap = p.clampMs / 1000;
+    raw = Math.max(boundarySec - cap, Math.min(boundarySec + cap, raw));
+  }
   // keep the edge inside the decoded window. walkLevel is already index-clamped, but
   // walkTime scales a span by the amount and can overshoot past 0 or the window end.
   const maxSec = ctx.rms.length * ctx.windowDur;
@@ -65,12 +69,7 @@ function walkLevel(
   } else {
     while (i + step >= 0 && i + step < n && (rms[i] ?? 0) > target) i += step;
   }
-  let edge = i * windowDur;
-  if (p.clampMs > 0) {
-    const cap = p.clampMs / 1000;
-    edge = Math.max(boundarySec - cap, Math.min(boundarySec + cap, edge));
-  }
-  return edge;
+  return i * windowDur;
 }
 
 function walkTime(boundarySec: number, soundDir: 1 | -1, ctx: EdgeCtx, p: EdgeParams): number {

@@ -47,7 +47,7 @@ const DEFAULTS: Settings = {
   thresh: "quiet",
   stripEdge: 0,
   stripEdgeMode: "level",
-  stripEdgeClampMs: 0,
+  stripEdgeClampMs: 50,
   levelOn: false,
   levelTarget: "average",
   ceilingDb: -1,

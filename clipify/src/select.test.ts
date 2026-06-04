@@ -227,6 +227,30 @@ test("stripEdge default (0) places strip edges on the detected extent", () => {
   assert.deepEqual(sel.strips[1], { start: 4.2, end: 4.8 });
 });
 
+test("loosening past the crossing point drops the strip instead of folding it", () => {
+  const cand = [{
+    durSec: 0.2, edge: false,
+    gapStartFrac: 0.4, gapEndFrac: 0.6, gapStartBeat: 4, gapEndBeat: 6,
+    quiet: { hasDeep: true, cutFrac: 0.45, deepEndFrac: 0.55, cutBeat: 4.5, deepEndBeat: 5.5, cutSec: 0.45, deepEndSec: 0.55 },
+    silence: { hasDeep: true, cutFrac: 0.45, deepEndFrac: 0.55, cutBeat: 4.5, deepEndBeat: 5.5, cutSec: 0.45, deepEndSec: 0.55 },
+    prevLevelDb: 30, nextLevelDb: 30,
+  }];
+  const windowDur = 0.05;
+  const floor = 0.001;
+  const rms = new Array(20).fill(0.05); // all above the loosen target, so both edges run and cross
+  const edge = {
+    rms, windowDur, noiseFloor: floor,
+    quietThresh: floor * Math.pow(10, 9 / 20),
+    silenceThresh: Math.pow(10, -78 / 20),
+    frac: (s: number) => s / (20 * windowDur),
+    secToArrBeat: (s: number) => s,
+  };
+  // full loosen, no clamp (base clampMs 0): edges cross -> region dropped
+  const s = { ...base, stripOn: true, stripEdge: -1, stripEdgeMode: "level" as const };
+  const sel = computeSelection(cand as any, s, stripOnly, 0, 10, [], edge as any);
+  assert.equal(sel.strips.length, 0);
+});
+
 test("non-zero stripEdge walks a strip boundary off the detected extent", () => {
   // dedicated candidate with cutSec/deepEndSec set so the edge engine can fire;
   // twoGaps omits those fields so we can't mutate the shared fixture
