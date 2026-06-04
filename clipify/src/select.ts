@@ -2,8 +2,9 @@
 // Used by the headless commands (Split / Strip / Quick) AND the popup (which only
 // renders the result + draw fractions). No selection logic lives in the popup.
 
-import type { Candidate, Extent } from "./candidates.js";
+import type { Candidate, EdgeContext, Extent } from "./candidates.js";
 import type { Settings } from "./settings.js";
+import { placeEdge, type EdgeParams } from "./edge.js";
 
 export interface Portions {
   split: boolean; // cut phrase edges (keep silence)
@@ -29,34 +30,10 @@ export interface ValleyCut {
 const EPS = 0.001;
 
 const geom = (a: number, b: number, u: number) => a * Math.pow(b / a, u);
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 function thresholdFor(mode: Settings["mode"], s: number): number {
   if (mode === "MACRO") return s < 0.5 ? geom(1.5, 0.7, s / 0.5) : geom(0.7, 0.1, (s - 0.5) / 0.5);
   return s < 0.5 ? geom(0.5, 0.02, s / 0.5) : geom(0.02, 0.006, (s - 0.5) / 0.5);
-}
-
-// strip zone (beats + fractions): 0.5 = the silence extent (= the split cut),
-// <0.5 shrinks inward, >0.5 extends out toward the neighbouring notes
-function zone(c: Candidate, ext: Extent, sil: number) {
-  if (sil >= 0.5) {
-    const u = (sil - 0.5) / 0.5;
-    return {
-      b0: lerp(ext.cutBeat, c.gapStartBeat, u),
-      b1: lerp(ext.deepEndBeat, c.gapEndBeat, u),
-      f0: lerp(ext.cutFrac, c.gapStartFrac, u),
-      f1: lerp(ext.deepEndFrac, c.gapEndFrac, u),
-    };
-  }
-  const k = ((0.5 - sil) / 0.5) * 0.7;
-  const mB = (ext.cutBeat + ext.deepEndBeat) / 2;
-  const mF = (ext.cutFrac + ext.deepEndFrac) / 2;
-  return {
-    b0: lerp(ext.cutBeat, mB, k),
-    b1: lerp(ext.deepEndBeat, mB, k),
-    f0: lerp(ext.cutFrac, mF, k),
-    f1: lerp(ext.deepEndFrac, mF, k),
-  };
 }
 
 // Cull: a sound segment quieter than cullDb (dB above the floor) folds into the
@@ -133,6 +110,7 @@ export function computeSelection(
   winStartBeat: number,
   winEndBeat: number,
   valleys: ValleyCut[] = [],
+  edge?: EdgeContext,
 ): Selection {
   const thresh = thresholdFor(s.mode, s.mode === "MACRO" ? s.sensMacro : s.sensMicro);
   const cands = mergeCulledGaps(rawCands, s.cullDb, winStartBeat, winEndBeat);
@@ -180,18 +158,25 @@ export function computeSelection(
   for (const c of eligible) {
     const ext = s.thresh === "silence" ? c.silence : c.quiet;
     if (p.strip && ext.hasDeep) {
-      const z = zone(c, ext, s.silence);
-      // edge-pin: a strip reaching a window edge goes fully to it, ignoring the Amount
-      // inset — otherwise a sliver of leading/trailing silence is left as its own clip.
-      if (c.gapStartFrac <= EPS) {
-        z.b0 = winStartBeat;
-        z.f0 = 0;
+      // Strip region = the silence to remove. Its start edge rides the previous note's
+      // release, its end edge rides the next note's attack. The Edge knob walks each
+      // along the envelope; with no context (tests) or amount 0 it stays on the boundary.
+      let b0 = ext.cutBeat, f0 = ext.cutFrac;
+      let b1 = ext.deepEndBeat, f1 = ext.deepEndFrac;
+      if (edge && s.stripEdge !== 0 && ext.cutSec != null && ext.deepEndSec != null) {
+        const ep: EdgeParams = { mode: s.stripEdgeMode, amount: s.stripEdge, clampMs: s.stripEdgeClampMs };
+        const lvl = s.thresh === "silence" ? edge.silenceThresh : edge.quietThresh;
+        const startSec = placeEdge(ext.cutSec, -1, lvl, edge, ep); // sound to the LEFT
+        const endSec = placeEdge(ext.deepEndSec, 1, lvl, edge, ep); // sound to the RIGHT
+        if (endSec > startSec) {
+          b0 = edge.secToArrBeat(startSec); f0 = Math.max(0, Math.min(1, edge.frac(startSec)));
+          b1 = edge.secToArrBeat(endSec); f1 = Math.max(0, Math.min(1, edge.frac(endSec)));
+        }
       }
-      if (c.gapEndFrac >= 1 - EPS) {
-        z.b1 = winEndBeat;
-        z.f1 = 1;
-      }
-      strip(z.b0, z.b1, z.f0, z.f1);
+      // edge-pin: a strip reaching a window edge goes fully to it, no leftover sliver.
+      if (c.gapStartFrac <= EPS) { b0 = winStartBeat; f0 = 0; }
+      if (c.gapEndFrac >= 1 - EPS) { b1 = winEndBeat; f1 = 1; }
+      strip(b0, b1, f0, f1);
     } else if (p.split) {
       if (!ext.hasDeep) {
         cut(ext.cutBeat, ext.cutFrac);

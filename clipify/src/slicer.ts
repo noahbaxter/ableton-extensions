@@ -11,7 +11,7 @@
 import { initialize, AudioClip, AudioTrack } from "@ableton-extensions/sdk";
 
 import { detectSoundSegments, smoothedRms, floorFromRms, segmentLevelDb } from "./silence.js";
-import { buildCandidates, type Candidate } from "./candidates.js";
+import { buildCandidates, type Candidate, type EdgeContext } from "./candidates.js";
 import { findValleys } from "./valleys.js";
 import { snapToZeroCrossing } from "./zeroCross.js";
 import { buildEnvelope } from "./envelope.js";
@@ -41,6 +41,7 @@ interface ApplyResult {
 interface ClipPrep {
   target: Target;
   candidates: Candidate[];
+  edge: EdgeContext;
   valleys: ValleyCut[];
   envelope: number[]; // empty unless requested
   noiseFloor: number;
@@ -85,7 +86,7 @@ async function prepareAll(
 
   return rendered.map((d) => {
     const detection = detectSoundSegments(d.channels, d.sampleRate, undefined, sharedFloor);
-    const candidates = buildCandidates(detection, {
+    const { candidates, edge } = buildCandidates(detection, {
       startSec: 0,
       endSec: d.durSec,
       secToArrBeat: d.secToArrBeat,
@@ -107,6 +108,7 @@ async function prepareAll(
     return {
       target: d.target,
       candidates,
+      edge,
       valleys,
       envelope: withEnvelope ? buildEnvelope(d.channels, d.sampleRate, 0, d.durSec) : [],
       noiseFloor: detection.noiseFloor,
@@ -208,6 +210,7 @@ async function applyMany(
       p.target.winStartBeat,
       p.target.winEndBeat,
       p.valleys,
+      p.edge,
     );
     if (sel.cutBeats.length) {
       jobs.push({ track: p.target.track, cuts: dedupe(sel.cutBeats), strips: sel.strips });
