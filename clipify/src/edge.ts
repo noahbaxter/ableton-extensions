@@ -35,9 +35,14 @@ export function placeEdge(
   p: EdgeParams,
 ): number {
   if (p.amount === 0) return boundarySec;
-  return p.mode === "level"
-    ? walkLevel(boundarySec, soundDir, boundaryLevel, ctx, p)
-    : walkTime(boundarySec, soundDir, ctx, p);
+  const raw =
+    p.mode === "level"
+      ? walkLevel(boundarySec, soundDir, boundaryLevel, ctx, p)
+      : walkTime(boundarySec, soundDir, ctx, p);
+  // keep the edge inside the decoded window. walkLevel is already index-clamped, but
+  // walkTime scales a span by the amount and can overshoot past 0 or the window end.
+  const maxSec = ctx.rms.length * ctx.windowDur;
+  return Math.max(0, Math.min(maxSec, raw));
 }
 
 function walkLevel(

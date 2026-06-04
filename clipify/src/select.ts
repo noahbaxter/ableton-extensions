@@ -168,6 +168,7 @@ export function computeSelection(
         const lvl = s.thresh === "silence" ? edge.silenceThresh : edge.quietThresh;
         const startSec = placeEdge(ext.cutSec, -1, lvl, edge, ep); // sound to the LEFT
         const endSec = placeEdge(ext.deepEndSec, 1, lvl, edge, ep); // sound to the RIGHT
+        // if the walked edges crossed (degenerate strip), keep the detected boundary
         if (endSec > startSec) {
           b0 = edge.secToArrBeat(startSec); f0 = Math.max(0, Math.min(1, edge.frac(startSec)));
           b1 = edge.secToArrBeat(endSec); f1 = Math.max(0, Math.min(1, edge.frac(endSec)));

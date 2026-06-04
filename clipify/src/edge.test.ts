@@ -52,6 +52,16 @@ test("time tighten moves the edge a fraction of the attack span toward the sound
   assert.ok(edge > boundarySec, `expected later, got ${edge}`);
 });
 
+test("placeEdge clamps an overshooting result to the decoded window", () => {
+  // amount beyond the normal -1..+1 contract: walkTime would push the edge past the
+  // window end; placeEdge must clamp it to rms.length * windowDur.
+  const maxSec = rms.length * ctx.windowDur;
+  const p: EdgeParams = { mode: "time", amount: 20, clampMs: 0 };
+  const edge = placeEdge(boundarySec, 1, boundaryLevel, ctx, p);
+  assert.ok(edge >= 0 && edge <= maxSec + 1e-9, `out of window: ${edge}`);
+  assert.equal(edge, maxSec);
+});
+
 test("start edge (sound to the left) tightens by moving earlier into the release", () => {
   // mirror: a release falling into silence on the right. Reuse ctx but soundDir -1.
   const p: EdgeParams = { mode: "level", amount: 0.6, clampMs: 0 };
