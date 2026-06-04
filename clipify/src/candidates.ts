@@ -3,7 +3,7 @@
 // For each gap between two sound segments we precompute its silence extent at two
 // thresholds — QUIET (down to the noise floor) and SILENCE (true digital silence,
 // ~-60 dB) — in both window fractions (canvas) and arrangement beats (applying).
-// The active threshold drives BOTH the split cut and the strip zone, so they stay
+// The active threshold drives BOTH the split cut and the strip region, so they stay
 // locked together. CONTENT mode reuses the QUIET extents but strips the sound
 // between them instead of the silence.
 //

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeSelection, type ValleyCut } from "./select.js";
 import type { Settings } from "./settings.js";
+import type { EdgeContext } from "./candidates.js";
 
 const base: Settings = {
   mode: "MICRO",
@@ -224,4 +225,52 @@ test("stripEdge default (0) places strip edges on the detected extent", () => {
   // unchanged from the cull-off case: edges at the quiet extents
   assert.deepEqual(sel.strips[0], { start: 1.2, end: 1.8 });
   assert.deepEqual(sel.strips[1], { start: 4.2, end: 4.8 });
+});
+
+test("non-zero stripEdge walks a strip boundary off the detected extent", () => {
+  // dedicated candidate with cutSec/deepEndSec set so the edge engine can fire;
+  // twoGaps omits those fields so we can't mutate the shared fixture
+  const windowDur = 0.02;
+  const floor = 0.001;
+  // 25 windows: sound (0-5), silence (6-19), sound (20-24)
+  const rms = new Array(25).fill(floor) as number[];
+  for (let i = 0; i <= 5; i++) rms[i] = 0.05;
+  for (let i = 20; i < 25; i++) rms[i] = 0.05;
+  const cand = [
+    {
+      durSec: 0.5, edge: false,
+      gapStartFrac: 0.1, gapEndFrac: 0.4, gapStartBeat: 0.1, gapEndBeat: 0.4,
+      quiet: {
+        hasDeep: true,
+        cutFrac: 0.12, deepEndFrac: 0.38,
+        cutBeat: 0.12, deepEndBeat: 0.38,
+        cutSec: 0.12, deepEndSec: 0.38,
+      },
+      silence: {
+        hasDeep: true,
+        cutFrac: 0.12, deepEndFrac: 0.38,
+        cutBeat: 0.12, deepEndBeat: 0.38,
+        cutSec: 0.12, deepEndSec: 0.38,
+      },
+      prevLevelDb: 30, nextLevelDb: 30,
+    },
+  ];
+  const edge: EdgeContext = {
+    rms,
+    windowDur,
+    noiseFloor: floor,
+    quietThresh: floor * Math.pow(10, 9 / 20),
+    silenceThresh: Math.pow(10, -78 / 20),
+    frac: (s: number) => s / (25 * windowDur),
+    secToArrBeat: (s: number) => s,
+  };
+  const s0 = { ...base, stripOn: true, stripEdge: 0, stripEdgeMode: "time" as const };
+  const sTight = { ...base, stripOn: true, stripEdge: 0.8, stripEdgeMode: "time" as const };
+  const r0 = computeSelection(cand as any, s0, stripOnly, 0, 10);
+  const rTight = computeSelection(cand as any, sTight, stripOnly, 0, 10, [], edge);
+  // with edge active, at least one boundary must move off the detected extent
+  assert.ok(
+    rTight.strips[0]!.start !== r0.strips[0]!.start || rTight.strips[0]!.end !== r0.strips[0]!.end,
+    `expected a moved boundary, got ${JSON.stringify(rTight.strips[0])} vs ${JSON.stringify(r0.strips[0])}`,
+  );
 });

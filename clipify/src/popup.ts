@@ -461,14 +461,23 @@ function init(): void {
   });
   bindSeg("cutat", "cutAt");
   bindSeg("action", "stripAction");
-  bindSeg("thresh", "thresh");
+  bindSeg("thresh", "thresh", () => edgeRowSync());
 
   // Edge: bipolar creep. Slider 0..1 -> stripEdge -1..+1 (0.5 = boundary, no change).
   const edgeInput = el("edge") as HTMLInputElement;
   const edgeVal = el("edge-val");
+
+  // The Edge knob has no effect in Content mode (that strip path bypasses the edge
+  // engine), so grey it out there to match the control's real behavior.
+  const edgeActive = () => state.thresh !== "content";
+
   const edgePaint = () => {
     const v = parseFloat(edgeInput.value);
     edgeInput.style.setProperty("--fill", v * 100 + "%");
+    if (!edgeActive()) {
+      edgeVal.textContent = "-";
+      return;
+    }
     const amt = v * 2 - 1; // -1..+1
     edgeVal.textContent =
       amt === 0 ? "0"
@@ -490,11 +499,11 @@ function init(): void {
     selectCuts();
   });
 
-  // Clamp (Level mode only): 0..100ms. Greyed in Time mode.
+  // Clamp (Level mode only): 0..100ms. Greyed in Time mode and in Content mode.
   const clampInput = el("edgeclamp") as HTMLInputElement;
   const clampVal = el("edgeclamp-val");
   const clampSync = () => {
-    const active = state.stripEdgeMode === "level";
+    const active = state.stripEdgeMode === "level" && edgeActive();
     clampInput.disabled = !active;
     clampInput.style.setProperty("--fill", (Number(clampInput.value) / Number(clampInput.max)) * 100 + "%");
     clampVal.textContent = !active ? "-" : Number(clampInput.value) === 0 ? "off" : clampInput.value + " ms";
@@ -507,7 +516,16 @@ function init(): void {
     selectCuts();
   });
 
+  const edgeRowSync = () => {
+    const on = edgeActive();
+    edgeInput.disabled = !on;
+    el("edgemode").classList.toggle("disabled", !on);
+    edgePaint();
+    clampSync();
+  };
+
   bindSeg("edgemode", "stripEdgeMode", () => { edgePaint(); clampSync(); });
+  edgeRowSync();
 
   wireNormalize();
   wireMaxChange();
