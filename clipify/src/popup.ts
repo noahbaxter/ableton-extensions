@@ -4,7 +4,7 @@
 
 import type { Candidate } from "./candidates.js";
 import type { Settings } from "./settings.js";
-import { computeSelection } from "./select.js";
+import { computeSelection, type ValleyCut } from "./select.js";
 
 interface ClipView {
   name: string;
@@ -13,6 +13,7 @@ interface ClipView {
   envelope: number[];
   noiseFloorLevel: number;
   candidates: Candidate[];
+  valleys: ValleyCut[];
   hasContent: boolean;
 }
 
@@ -49,7 +50,7 @@ function selectCuts(): void {
       strips += 1; // whole clip is below threshold → stripped entirely
       return { clip, cuts: [], strips: [{ f0: 0, f1: 1 }] };
     }
-    const r = computeSelection(clip.candidates, state, portions, clip.winStartBeat, clip.winEndBeat);
+    const r = computeSelection(clip.candidates, state, portions, clip.winStartBeat, clip.winEndBeat, clip.valleys);
     cuts += r.cutBeats.length;
     strips += r.strips.length;
     return { clip, cuts: r.drawCuts, strips: r.drawStrips };
@@ -285,6 +286,13 @@ function init(): void {
     "silence",
     () => state.silence,
     (v) => (state.silence = v),
+  );
+  // TEMP: audition control for valley cuts (final control design is deferred).
+  // Slider 0 = off (depth 1.0); 1 = most cuts (depth 0.2).
+  wireSlider(
+    "detail",
+    () => (1 - state.valleyDepth) / 0.8,
+    (v) => (state.valleyDepth = 1 - 0.8 * v),
   );
 
   bindToggle("split-toggle", "splitOn", "split-body");

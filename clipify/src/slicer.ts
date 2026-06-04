@@ -12,11 +12,13 @@ import { initialize, AudioClip, AudioTrack } from "@ableton-extensions/sdk";
 
 import { detectSoundSegments, smoothedRms, floorFromRms } from "./silence.js";
 import { buildCandidates, type Candidate } from "./candidates.js";
+import { findValleys } from "./valleys.js";
+import { snapToZeroCrossing } from "./zeroCross.js";
 import { buildEnvelope } from "./envelope.js";
 import { renderWindow } from "./render.js";
 import { applyLevel, type LevelRange } from "./level.js";
 import { loadSettings, saveSettings, type Settings } from "./settings.js";
-import { computeSelection, type Portions } from "./select.js";
+import { computeSelection, type Portions, type ValleyCut } from "./select.js";
 import { debug } from "./debug.js";
 import popupHtml from "./popup.html";
 
@@ -39,6 +41,7 @@ interface ApplyResult {
 interface ClipPrep {
   target: Target;
   candidates: Candidate[];
+  valleys: ValleyCut[];
   envelope: number[]; // empty unless requested
   noiseFloor: number;
   hasContent: boolean; // false when the whole window is below threshold
@@ -89,13 +92,21 @@ async function prepareAll(
       channels: d.channels,
       sampleRate: d.sampleRate,
     });
+    const span = d.durSec || 1;
+    const valleys: ValleyCut[] = detection.segments.flatMap((seg) =>
+      findValleys(d.channels, d.sampleRate, seg.start, seg.end, detection.noiseFloor).map((v) => {
+        const t = snapToZeroCrossing(d.channels, d.sampleRate, v.timeSec);
+        return { cutBeat: d.secToArrBeat(t), cutFrac: t / span, depthRatio: v.depthRatio, widthSec: v.widthSec };
+      }),
+    );
     debug.log(
       `prepare "${d.target.clip.name}"  floor ${debug.db(detection.noiseFloor)}dB  ` +
-        `${detection.segments.length} segments  ${candidates.length} gaps`,
+        `${detection.segments.length} segments  ${candidates.length} gaps  ${valleys.length} valleys`,
     );
     return {
       target: d.target,
       candidates,
+      valleys,
       envelope: withEnvelope ? buildEnvelope(d.channels, d.sampleRate, 0, d.durSec) : [],
       noiseFloor: detection.noiseFloor,
       hasContent: detection.segments.length > 0,
@@ -118,6 +129,7 @@ export async function runSliceStrip(context: Ctx, targets: Target[]): Promise<vo
       // RMS noise floor scaled toward full-scale for a rough canvas reference line
       noiseFloorLevel: Math.min(1, p.noiseFloor * 4),
       candidates: p.candidates,
+      valleys: p.valleys,
       hasContent: p.hasContent,
     })),
     spanStartBeat,
@@ -194,6 +206,7 @@ async function applyMany(
       portions,
       p.target.winStartBeat,
       p.target.winEndBeat,
+      p.valleys,
     );
     if (sel.cutBeats.length) {
       jobs.push({ track: p.target.track, cuts: dedupe(sel.cutBeats), strips: sel.strips });
