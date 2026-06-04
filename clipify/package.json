@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc --noEmit && tsx build.ts --production",
     "build:dev": "tsc --noEmit && tsx build.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "start": "tsx build.ts && extensions-cli run",
     "package": "npm run build && extensions-cli package -o dist/clipify.ablx"
   },
