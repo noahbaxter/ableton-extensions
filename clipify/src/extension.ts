@@ -24,7 +24,7 @@ export function activate(activation: ActivationContext) {
 
   // Headless commands — apply the portion(s) with the last-saved settings, no popup
   const headless: { id: string; label: string; portions: Portions }[] = [
-    { id: "clipify.split", label: "Split", portions: { split: true, strip: false } },
+    { id: "clipify.split", label: "Slice", portions: { split: true, strip: false } },
     { id: "clipify.strip", label: "Strip", portions: { split: false, strip: true } },
     { id: "clipify.quick", label: "Auto", portions: { split: true, strip: true } },
   ];

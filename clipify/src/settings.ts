@@ -5,12 +5,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 export interface Settings {
-  // splits
-  splitOn: boolean; // SPLITS section enabled
+  // detection — global; drives BOTH splits and strip
   mode: "MACRO" | "MICRO";
-  cutAt: "start" | "end" | "both"; // which phrase edges to cut
   sensMacro: number; // 0..1, MACRO's own sensitivity
   sensMicro: number; // 0..1, MICRO's own sensitivity
+  // splits
+  splitOn: boolean; // SPLITS section enabled
+  cutAt: "start" | "end" | "both"; // which phrase edges to cut
   // strip
   stripOn: boolean; // STRIP section enabled
   stripAction: "deactivate" | "delete";
@@ -25,11 +26,11 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
-  splitOn: true,
   mode: "MACRO",
-  cutAt: "both",
   sensMacro: 0.5,
   sensMicro: 0.7,
+  splitOn: true,
+  cutAt: "both",
   stripOn: false,
   stripAction: "deactivate",
   thresh: "quiet",
