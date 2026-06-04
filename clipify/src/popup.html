@@ -12,7 +12,7 @@
         --dim: #8a8a8a;
         --accent: #f5a623;
         --wave: #9a9a9a;
-        --strip: rgba(245, 166, 35, 0.16);
+        --strip: rgba(225, 75, 75, 0.2);
       }
       * { box-sizing: border-box; }
       html, body {
@@ -55,6 +55,7 @@
       input[type=range]::-webkit-slider-thumb {
         -webkit-appearance: none; margin-top: -4px; width: 11px; height: 11px; border-radius: 50%; background: #d8d8d8;
       }
+      input[type=range]:disabled { opacity: 0.3; cursor: default; }
 
       .foot { margin-top: auto; display: flex; justify-content: flex-end; gap: 8px; }
       .foot button { appearance: none; border: 0; border-radius: 4px; padding: 6px 16px; font: inherit; cursor: pointer; }
@@ -125,16 +126,13 @@
             <button data-val="content">Content</button>
           </div>
         </div>
-        <div class="row">
-          <label>Amount</label>
-          <input type="range" id="silence" min="0" max="1" step="0.01" />
-        </div>
       </div>
 
       <div class="section"><span class="toggle" id="level-toggle"></span> Level</div>
       <div class="body" id="level-body">
         <div class="row">
-          <label>Ceiling</label>
+          <label>Normalize</label>
+          <span class="toggle off" id="boost-toggle"></span>
           <input type="range" id="ceiling" min="-6" max="0" step="0.5" />
           <span class="val" id="ceiling-val"></span>
         </div>

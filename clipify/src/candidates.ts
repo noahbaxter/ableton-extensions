@@ -39,6 +39,7 @@ export interface Candidate {
   silence: Extent; // true digital silence
   prevLevelDb: number | null; // sound segment before this gap (null = window edge)
   nextLevelDb: number | null; // sound segment after this gap
+  folded?: boolean; // cull merged/extended this gap → it's real silence, always eligible
 }
 
 interface Window {

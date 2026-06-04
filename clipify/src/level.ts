@@ -120,10 +120,13 @@ export async function applyLevel(
   }
   if (measured.length < 2) return;
 
-  // Common RMS target every clip can reach without its peak passing the ceiling:
-  // T = min over clips of (ceiling − crest). The peakiest clip lands exactly at the
-  // ceiling; louder clips come down, quieter ones go up. None clip by construction.
-  const target = Math.min(...measured.map((m) => settings.ceilingDb - (m.peakDb - m.rmsDb)));
+  // Highest common RMS no clip's peak can exceed the ceiling at (T = min of ceiling −
+  // crest). "ceiling" mode targets this — the peakiest clip lands at the ceiling.
+  // "average" mode targets the clips' mean RMS instead (capped so none clips), so loud
+  // clips come down and quiet ones up around the existing level — no overall boost.
+  const ceilingLimit = Math.min(...measured.map((m) => settings.ceilingDb - (m.peakDb - m.rmsDb)));
+  const meanRms = measured.reduce((sum, m) => sum + m.rmsDb, 0) / measured.length;
+  const target = settings.levelTarget === "average" ? Math.min(meanRms, ceilingLimit) : ceilingLimit;
 
   const moves = measured
     .map((m) => ({ m, gainDb: clamp(target - m.rmsDb, -settings.maxChangeDb, settings.maxChangeDb) }))

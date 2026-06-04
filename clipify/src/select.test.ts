@@ -7,7 +7,8 @@ const base: Settings = {
   mode: "MICRO",
   sensMacro: 0.5,
   sensMicro: 0.7,
-  valleyDepth: 1,
+  valleyDepthMacro: 1,
+  valleyDepthMicro: 1,
   valleyMinWidthMs: 25,
   cullDb: 0,
   splitOn: true,
@@ -17,6 +18,7 @@ const base: Settings = {
   thresh: "quiet",
   silence: 0.5,
   levelOn: false,
+  levelTarget: "average",
   ceilingDb: -1,
   maxChangeDb: 12,
   avgAcrossClips: true,
@@ -43,21 +45,21 @@ test("a floor-deep valley (depthRatio 1) still does not cut at default depth", (
 });
 
 test("a deep, wide valley cuts when the depth knob is lowered", () => {
-  const s = { ...base, valleyDepth: 0.5 };
+  const s = { ...base, valleyDepthMicro: 0.5 };
   const sel = computeSelection([], s, split, 0, 10, valleys);
   assert.deepEqual(sel.cutBeats, [5]);
   assert.deepEqual(sel.drawCuts, [0.5]);
 });
 
 test("too-narrow valley is rejected even when deep enough", () => {
-  const s = { ...base, valleyDepth: 0.5, valleyMinWidthMs: 25 };
+  const s = { ...base, valleyDepthMicro: 0.5, valleyMinWidthMs: 25 };
   const narrow: ValleyCut[] = [{ cutBeat: 5, cutFrac: 0.5, depthRatio: 0.9, widthSec: 0.01, segLevelDb: 30 }];
   const sel = computeSelection([], s, split, 0, 10, narrow);
   assert.equal(sel.cutBeats.length, 0);
 });
 
 test("valleys are not added when split is off (strip-only)", () => {
-  const s = { ...base, valleyDepth: 0.5, stripOn: true };
+  const s = { ...base, valleyDepthMicro: 0.5, stripOn: true };
   const sel = computeSelection([], s, { split: false, strip: true }, 0, 10, valleys);
   assert.equal(sel.cutBeats.length, 0);
 });
@@ -102,21 +104,21 @@ test("cull on: split cuts drop as gaps merge (never increase)", () => {
 });
 
 test("cull on: a valley inside a culled segment is skipped", () => {
-  const s = { ...base, cullDb: 10, valleyDepth: 0.5 };
+  const s = { ...base, cullDb: 10, valleyDepthMicro: 0.5 };
   const inCulled: ValleyCut[] = [{ cutBeat: 1.5, cutFrac: 0.15, depthRatio: 0.9, widthSec: 0.05, segLevelDb: 4 }];
   const sel = computeSelection([], s, split, 0, 10, inCulled);
   assert.equal(sel.cutBeats.length, 0);
 });
 
 test("cull on: a valley inside a kept segment still cuts", () => {
-  const s = { ...base, cullDb: 10, valleyDepth: 0.5 };
+  const s = { ...base, cullDb: 10, valleyDepthMicro: 0.5 };
   const inKept: ValleyCut[] = [{ cutBeat: 3.5, cutFrac: 0.35, depthRatio: 0.9, widthSec: 0.05, segLevelDb: 30 }];
   const sel = computeSelection([], s, split, 0, 10, inKept);
   assert.deepEqual(sel.cutBeats, [3.5]);
 });
 
 test("cull off: a valley whose segment level is below the floor (negative dB) still cuts", () => {
-  const s = { ...base, valleyDepth: 0.5 }; // cullDb stays 0 → must be a strict no-op
+  const s = { ...base, valleyDepthMicro: 0.5 }; // cullDb stays 0 → must be a strict no-op
   const v: ValleyCut[] = [{ cutBeat: 3.5, cutFrac: 0.35, depthRatio: 0.9, widthSec: 0.05, segLevelDb: -5 }];
   const sel = computeSelection([], s, split, 0, 10, v);
   assert.deepEqual(sel.cutBeats, [3.5]);
@@ -166,6 +168,37 @@ test("cull on: a culled FIRST segment (no leading gap) folds back to the window 
   const sel = computeSelection(cands as any, s, stripOnly, 0, 10);
   assert.equal(sel.strips.length, 1);
   assert.equal(sel.strips[0]!.start, 0); // extended back to winStartBeat
+});
+
+test("strip pins a trailing edge gap to the window end regardless of Amount (no sliver)", () => {
+  const trail = [
+    {
+      durSec: 3, edge: true, gapStartFrac: 0.7, gapEndFrac: 1, gapStartBeat: 7, gapEndBeat: 10,
+      quiet: { hasDeep: true, cutFrac: 0.72, deepEndFrac: 0.9, cutBeat: 7.2, deepEndBeat: 9 },
+      silence: { hasDeep: true, cutFrac: 0.72, deepEndFrac: 0.9, cutBeat: 7.2, deepEndBeat: 9 },
+      prevLevelDb: 30, nextLevelDb: null,
+    },
+  ];
+  const s = { ...base, silence: 0.5 }; // Amount 0.5 would otherwise stop the strip at beat 9
+  const sel = computeSelection(trail as any, s, { split: false, strip: true }, 0, 10);
+  assert.equal(sel.strips[0]!.end, 10);
+});
+
+test("cull on (MACRO): a culled last segment behind a short gap still folds to the window end", () => {
+  // the gap before the culled last segment is shorter than the MACRO duration
+  // threshold; once cull folds it, it must bypass that threshold (folded = eligible)
+  const cands = [
+    {
+      durSec: 0.1, edge: false, gapStartFrac: 0.2, gapEndFrac: 0.21, gapStartBeat: 2, gapEndBeat: 2.1,
+      quiet: { hasDeep: true, cutFrac: 0.2, deepEndFrac: 0.21, cutBeat: 2.0, deepEndBeat: 2.1 },
+      silence: { hasDeep: true, cutFrac: 0.2, deepEndFrac: 0.21, cutBeat: 2.0, deepEndBeat: 2.1 },
+      prevLevelDb: 30, nextLevelDb: 4,
+    },
+  ];
+  const s = { ...base, mode: "MACRO" as const, cullDb: 10, silence: 0.5 };
+  const sel = computeSelection(cands as any, s, { split: false, strip: true }, 0, 10);
+  assert.equal(sel.strips.length, 1);
+  assert.equal(sel.strips[0]!.end, 10);
 });
 
 test("cull on: a culled LAST segment (no trailing gap) folds out to the window end", () => {

@@ -15,6 +15,7 @@ export interface Selection {
   strips: { start: number; end: number }[];
   drawCuts: number[]; // window fractions [0,1] of every cut (for the canvas)
   drawStrips: { f0: number; f1: number }[]; // window fractions of each strip region
+  drawSegments: number[]; // window fractions of the segment boundaries (always shown)
 }
 
 export interface ValleyCut {
@@ -84,6 +85,7 @@ function mergeCulledGaps(cands: Candidate[], cullDb: number, winStartBeat: numbe
         ...prev,
         durSec: prev.durSec + c.durSec,
         edge: prev.edge || c.edge,
+        folded: true,
         gapEndFrac: c.gapEndFrac,
         gapEndBeat: c.gapEndBeat,
         quiet: span(prev.quiet, c.quiet),
@@ -101,6 +103,7 @@ function mergeCulledGaps(cands: Candidate[], cullDb: number, winStartBeat: numbe
   if (first && first.prevLevelDb != null && first.prevLevelDb < cullDb) {
     out[0] = {
       ...first,
+      folded: true,
       gapStartBeat: winStartBeat,
       gapStartFrac: 0,
       quiet: { ...first.quiet, hasDeep: true, cutBeat: winStartBeat, cutFrac: 0 },
@@ -112,6 +115,7 @@ function mergeCulledGaps(cands: Candidate[], cullDb: number, winStartBeat: numbe
   if (last && last.nextLevelDb != null && last.nextLevelDb < cullDb) {
     out[out.length - 1] = {
       ...last,
+      folded: true,
       gapEndBeat: winEndBeat,
       gapEndFrac: 1,
       quiet: { ...last.quiet, hasDeep: true, deepEndBeat: winEndBeat, deepEndFrac: 1 },
@@ -132,21 +136,31 @@ export function computeSelection(
 ): Selection {
   const thresh = thresholdFor(s.mode, s.mode === "MACRO" ? s.sensMacro : s.sensMicro);
   const cands = mergeCulledGaps(rawCands, s.cullDb, winStartBeat, winEndBeat);
-  const sel: Selection = { cutBeats: [], strips: [], drawCuts: [], drawStrips: [] };
+  const sel: Selection = { cutBeats: [], strips: [], drawCuts: [], drawStrips: [], drawSegments: [] };
   const cut = (beat: number, frac: number) => {
     sel.cutBeats.push(beat);
     sel.drawCuts.push(frac);
   };
   const strip = (b0: number, b1: number, f0: number, f1: number) => {
-    cut(b0, f0);
-    cut(b1, f1);
+    // boundaries are real cuts at apply (to isolate the region), but on the canvas a
+    // strip is shown by its fill alone — not as slice lines — so the two read apart.
+    sel.cutBeats.push(b0, b1);
     sel.strips.push({ start: b0, end: b1 });
     sel.drawStrips.push({ f0, f1 });
   };
 
   const eligible = cands.filter(
-    (c) => c.edge || (c.durSec >= thresh && (s.mode !== "MACRO" || c.quiet.hasDeep)),
+    (c) => c.edge || c.folded || (c.durSec >= thresh && (s.mode !== "MACRO" || c.quiet.hasDeep)),
   );
+
+  // segment boundaries (always drawn, independent of which operations are on): the
+  // active-threshold silence edges of every eligible gap — the points where one
+  // detected chunk ends and the next begins.
+  for (const c of eligible) {
+    const ext = s.thresh === "silence" ? c.silence : c.quiet;
+    if (ext.cutFrac > EPS && ext.cutFrac < 1 - EPS) sel.drawSegments.push(ext.cutFrac);
+    if (ext.hasDeep && ext.deepEndFrac > EPS && ext.deepEndFrac < 1 - EPS) sel.drawSegments.push(ext.deepEndFrac);
+  }
 
   // CONTENT strip: cut at the (quiet) silence boundaries and strip the SOUND between them
   if (p.strip && s.thresh === "content") {
@@ -167,6 +181,16 @@ export function computeSelection(
     const ext = s.thresh === "silence" ? c.silence : c.quiet;
     if (p.strip && ext.hasDeep) {
       const z = zone(c, ext, s.silence);
+      // edge-pin: a strip reaching a window edge goes fully to it, ignoring the Amount
+      // inset — otherwise a sliver of leading/trailing silence is left as its own clip.
+      if (c.gapStartFrac <= EPS) {
+        z.b0 = winStartBeat;
+        z.f0 = 0;
+      }
+      if (c.gapEndFrac >= 1 - EPS) {
+        z.b1 = winEndBeat;
+        z.f1 = 1;
+      }
       strip(z.b0, z.b1, z.f0, z.f1);
     } else if (p.split) {
       if (!ext.hasDeep) {
@@ -183,10 +207,11 @@ export function computeSelection(
   // (strict >, since a dip to the floor clamps to exactly 1) — a no-op until the depth
   // knob is lowered.
   if (p.split) {
+    const valleyDepth = s.mode === "MACRO" ? s.valleyDepthMacro : s.valleyDepthMicro;
     const minWidthSec = s.valleyMinWidthMs / 1000;
     for (const v of valleys) {
       const inCulledSeg = s.cullDb > 0 && v.segLevelDb < s.cullDb;
-      if (!inCulledSeg && v.depthRatio > s.valleyDepth && v.widthSec >= minWidthSec)
+      if (!inCulledSeg && v.depthRatio > valleyDepth && v.widthSec >= minWidthSec)
         cut(v.cutBeat, v.cutFrac);
     }
   }

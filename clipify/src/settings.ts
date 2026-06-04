@@ -9,7 +9,8 @@ export interface Settings {
   mode: "MACRO" | "MICRO";
   sensMacro: number; // 0..1, MACRO's own sensitivity
   sensMicro: number; // 0..1, MICRO's own sensitivity
-  valleyDepth: number; // min dip depth (0..1, peak→floor) to cut inside a segment; 1 = off
+  valleyDepthMacro: number; // MACRO's valley-cut depth threshold (0..1, peak→floor); 1 = off
+  valleyDepthMicro: number; // MICRO's valley-cut depth threshold (0..1); 1 = off
   valleyMinWidthMs: number; // a dip must last at least this long to count as a cut
   cullDb: number; // segments quieter than this (dB above floor) fold into silence; 0 = off
   // splits
@@ -22,6 +23,7 @@ export interface Settings {
   silence: number; // 0..1, strip-zone extent
   // level
   levelOn: boolean; // LEVEL section enabled
+  levelTarget: "ceiling" | "average"; // push every clip toward the ceiling, or toward their mean (preserves overall loudness)
   ceilingDb: number; // dBFS peak ceiling a boost may not exceed
   maxChangeDb: 6 | 12 | 24; // hardest boost allowed on any one clip
   // advanced
@@ -32,7 +34,8 @@ const DEFAULTS: Settings = {
   mode: "MACRO",
   sensMacro: 0.5,
   sensMicro: 0.7,
-  valleyDepth: 1, // off — admits no intra-segment valleys (today's behaviour)
+  valleyDepthMacro: 1, // off — phrase-level MACRO doesn't split inside segments
+  valleyDepthMicro: 0.6, // event-level MICRO splits at moderately-deep dips by default
   valleyMinWidthMs: 25,
   cullDb: 0, // off — culls nothing (every real segment is > 0 dB above the floor)
   splitOn: true,
@@ -42,6 +45,7 @@ const DEFAULTS: Settings = {
   thresh: "quiet",
   silence: 0.5,
   levelOn: false,
+  levelTarget: "average",
   ceilingDb: -1,
   maxChangeDb: 12,
   avgAcrossClips: true,
