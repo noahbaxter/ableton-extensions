@@ -9,6 +9,8 @@ export interface Settings {
   mode: "MACRO" | "MICRO";
   sensMacro: number; // 0..1, MACRO's own sensitivity
   sensMicro: number; // 0..1, MICRO's own sensitivity
+  valleyDepth: number; // min dip depth (0..1, peak→floor) to cut inside a segment; 1 = off
+  valleyMinWidthMs: number; // a dip must last at least this long to count as a cut
   // splits
   splitOn: boolean; // SPLITS section enabled
   cutAt: "start" | "end" | "both"; // which phrase edges to cut
@@ -29,6 +31,8 @@ const DEFAULTS: Settings = {
   mode: "MACRO",
   sensMacro: 0.5,
   sensMicro: 0.7,
+  valleyDepth: 1, // off — admits no intra-segment valleys (today's behaviour)
+  valleyMinWidthMs: 25,
   splitOn: true,
   cutAt: "both",
   stripOn: false,

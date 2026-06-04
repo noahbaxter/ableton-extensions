@@ -17,6 +17,13 @@ export interface Selection {
   drawStrips: { f0: number; f1: number }[]; // window fractions of each strip region
 }
 
+export interface ValleyCut {
+  cutBeat: number; // arrangement beat of the dip
+  cutFrac: number; // window fraction [0,1] of the dip (for the canvas)
+  depthRatio: number; // 0..1, fall toward the floor relative to neighbouring peaks
+  widthSec: number; // dip width at half-depth
+}
+
 const EPS = 0.001;
 
 const geom = (a: number, b: number, u: number) => a * Math.pow(b / a, u);
@@ -56,6 +63,7 @@ export function computeSelection(
   p: Portions,
   winStartBeat: number,
   winEndBeat: number,
+  valleys: ValleyCut[] = [],
 ): Selection {
   const thresh = thresholdFor(s.mode, s.mode === "MACRO" ? s.sensMacro : s.sensMicro);
   const sel: Selection = { cutBeats: [], strips: [], drawCuts: [], drawStrips: [] };
@@ -101,6 +109,16 @@ export function computeSelection(
         if (atEnd && ext.cutFrac > EPS) cut(ext.cutBeat, ext.cutFrac);
         if (atStart && ext.deepEndFrac < 1 - EPS) cut(ext.deepEndBeat, ext.deepEndFrac);
       }
+    }
+  }
+  // Stage 3 — intra-segment valley cuts (split only; never a strip region). Additive:
+  // depthRatio is clamped to [0,1], so the default valleyDepth of 1 admits nothing
+  // (strict >, since a dip to the floor clamps to exactly 1) — a no-op until the depth
+  // knob is lowered.
+  if (p.split) {
+    const minWidthSec = s.valleyMinWidthMs / 1000;
+    for (const v of valleys) {
+      if (v.depthRatio > s.valleyDepth && v.widthSec >= minWidthSec) cut(v.cutBeat, v.cutFrac);
     }
   }
   return sel;
